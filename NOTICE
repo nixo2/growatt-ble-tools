@@ -1,0 +1,31 @@
+Growatt NOAH (Bluetooth) for Home Assistant
+Copyright 2026 Peter Meiser
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This project is not affiliated with, endorsed by, or sponsored by Growatt New
+Energy Co., Ltd. "Growatt", "NOAH" and "ShinePhone" are trademarks of their
+respective owners. The images in custom_components/growatt_noah_ble/brand/ are
+original drawings made for this project.
+
+The Bluetooth protocol implemented in this project was determined by observing
+the communication between the ShinePhone app and a NOAH 2000 for the purpose
+of interoperability.
+
+
+Growatt NOAH BLE Watchdog
+------------------------
+Copyright 2026 nixo2
+
+This standalone watchdog application builds on the Growatt NOAH Bluetooth
+protocol implementation and BLE communication code by Peter Meiser.
+
+Original project: https://github.com/meiser79/growatt_noah_ble
+
+The watchdog-specific functionality includes interactive device selection,
+periodic BLE scanning, sequential status monitoring, and connection-state
+logging. The current version performs monitoring only; automatic recovery
+by rewriting WiFi or MQTT settings is a planned feature, not implemented.
+
+This watchdog is independently maintained and is not affiliated with,
+endorsed by, or sponsored by Growatt New Energy Co., Ltd.
