@@ -221,3 +221,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Growatt NOAH BLE Watchdog
+noah_watchdog_devices.json
+noah_watchdog.log
+watchdog_console.log
+*.log
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
