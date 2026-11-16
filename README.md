@@ -28,13 +28,17 @@ Some NOAH devices may lose their Wi-Fi or MQTT connection and fail to reconnect 
 
 **Important:** The meanings of all observed BLE status values and the effectiveness of rewriting configuration as a recovery method are not yet fully validated. Automatic recovery will not be enabled until these behaviors have been tested. Please share reproducible observations of `wifi_status` and `connection_state` through GitHub Issues; redact credentials, serial numbers, and other identifying details.
 
-## Requirements
+## Compatibility and requirements
 
-- Linux system with a working BLE adapter and BlueZ (tested on Raspberry Pi / Debian).
-- Python 3.11+ (`asyncio.timeout` is used).
-- BLE permissions and access to the adapter.
+- **Linux:** Tested on a Raspberry Pi 5 running Debian with a working BLE adapter and BlueZ.
+- **Windows:** Successfully tested on Windows 11 with Python 3.14 and a working Bluetooth adapter. BLE discovery, interactive device selection, authentication, status queries, and logging worked in this test.
+- **Python:** 3.11 or newer (`asyncio.timeout` is used).
+- Bluetooth Low Energy support and permission to access the adapter.
+- On Windows, the interactive terminal interface uses `windows-curses`, which is installed automatically by the platform-specific entry in `requirements.txt`.
 
-Install dependencies:
+## Installation
+
+### Linux (Debian / Raspberry Pi)
 
 ```bash
 git clone https://github.com/nixo2/growatt-noah-ble-watchdog.git
@@ -43,6 +47,26 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
+
+### Windows 11 (PowerShell)
+
+Clone the repository using Git, or download and extract the ZIP archive from GitHub. Open PowerShell in the project folder, then run:
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+The `requirements.txt` file installs `windows-curses` automatically on Windows (and skips it on Linux). No separate installation command is needed. You do not need to activate the virtual environment when using the explicit Python path shown above.
+
+To select devices and start monitoring on Windows:
+
+```powershell
+.\.venv\Scripts\python.exe noah_watchdog.py setup --timeout 30
+.\.venv\Scripts\python.exe noah_watchdog.py run
+```
+
+The generic `python` commands in the sections below work on Linux after activating the virtual environment. On Windows, use the explicit `.\.venv\Scripts\python.exe` path instead, or activate the environment first.
 
 ## Choose devices
 
@@ -64,13 +88,19 @@ The default cycle interval is five minutes and the BLE discovery scan is eight s
 python noah_watchdog.py run --minutes 5 --scan-timeout 15
 ```
 
-Results are printed to the console and appended to `noah_watchdog.log`. To follow the log:
+Results are printed to the console and appended to `noah_watchdog.log`. To follow the log on Linux:
 
 ```bash
 tail -f noah_watchdog.log
 ```
 
-To keep the monitor running after closing a remote shell:
+On Windows (PowerShell):
+
+```powershell
+Get-Content .\noah_watchdog.log -Wait -Tail 20
+```
+
+On Linux, to keep the monitor running after closing a remote shell:
 
 ```bash
 nohup python -u noah_watchdog.py run > watchdog_console.log 2>&1 < /dev/null &
