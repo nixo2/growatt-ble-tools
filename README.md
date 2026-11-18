@@ -1,44 +1,31 @@
 # Growatt NOAH BLE Watchdog
 
-An experimental standalone Bluetooth Low Energy (BLE) watchdog for Growatt NOAH battery storage systems. Built on the BLE protocol implementation by [Peter Meiser](https://github.com/meiser79/growatt_noah_ble).
+Experimental standalone Bluetooth Low Energy (BLE) monitoring and **opt-in recovery** for Growatt NOAH battery storage systems.
 
-> **v0.1.0 — Monitoring Only.** This release collects and logs connection status information. It does **not** automatically repair connections, rewrite Wi-Fi credentials, modify MQTT settings, or restart devices.
+Built on the BLE protocol implementation by [Peter Meiser](https://github.com/meiser79/growatt_noah_ble).
 
-## Project status and roadmap
+> **v0.2.0 — Experimental Recovery (test version).** Monitoring has been tested with three NOAH devices. Automatic Wi-Fi/MQTT reconfiguration and datalogger restart are experimental and have **not yet been validated as reliable recovery methods**. Recovery actions are disabled by default.
 
-Some NOAH devices may lose their Wi-Fi or MQTT connection and fail to reconnect without manual intervention. The long-term goal is to detect persistent connectivity problems and attempt recovery via BLE by reapplying the configured Wi-Fi credentials and/or MQTT broker settings.
-
-### Available now
+## Features
 
 - Discover NOAH devices advertising the Growatt BLE service.
-- Select monitored devices interactively (arrow keys, Space, Enter).
-- Scan before each monitoring cycle (default: every five minutes).
-- Connect to visible selected devices **sequentially**, not concurrently.
-- Query and log `wifi_status` and `connection_state`.
-- Log devices that are not BLE-visible without automatically treating them as faulty (devices may sleep or power down).
-- Save selected device addresses locally for future runs.
+- Select devices using an interactive terminal menu.
+- Scan and query selected, BLE-visible devices **sequentially**, normally every five minutes.
+- Read `wifi_status` and `connection_state` via BLE.
+- Optionally log routine queries and status information.
+- Optionally retry recovery by reapplying Wi-Fi credentials, correcting MQTT broker host/port, and/or requesting a datalogger restart.
+- Choose a threshold of **1, 2, or 3 consecutive abnormal polling cycles**, counted separately for each device.
+- Check `connection_state` again **30 seconds** after recovery actions.
+- Keep devices that are not visible in a BLE scan from being treated as network failures.
 
-### Planned (not implemented)
+## Requirements
 
-- Identify persistent Wi-Fi and/or MQTT connection failures, rather than reacting to brief interruptions.
-- Optional **Recovery Mode** that rewrites stored Wi-Fi credentials and/or MQTT broker configuration via BLE.
-- Check whether a recovery attempt succeeded and log its outcome.
-- Rate-limit retries and avoid repeated or unnecessary changes.
-- Retain **Monitor Mode** as a non-recovery option.
+- Python **3.11+**.
+- Working BLE adapter and Bluetooth permissions.
+- Linux with BlueZ (tested on Raspberry Pi / Debian), or Windows with a working BLE adapter.
+- Python packages listed in `requirements.txt`.
 
-**Important:** The meanings of all observed BLE status values and the effectiveness of rewriting configuration as a recovery method are not yet fully validated. Automatic recovery will not be enabled until these behaviors have been tested. Please share reproducible observations of `wifi_status` and `connection_state` through GitHub Issues; redact credentials, serial numbers, and other identifying details.
-
-## Compatibility and requirements
-
-- **Linux:** Tested on a Raspberry Pi 5 running Debian with a working BLE adapter and BlueZ.
-- **Windows:** Successfully tested on Windows 11 with Python 3.14 and a working Bluetooth adapter. BLE discovery, interactive device selection, authentication, status queries, and logging worked in this test.
-- **Python:** 3.11 or newer (`asyncio.timeout` is used).
-- Bluetooth Low Energy support and permission to access the adapter.
-- On Windows, the interactive terminal interface uses `windows-curses`, which is installed automatically by the platform-specific entry in `requirements.txt`.
-
-## Installation
-
-### Linux (Debian / Raspberry Pi)
+Example installation:
 
 ```bash
 git clone https://github.com/nixo2/growatt-noah-ble-watchdog.git
@@ -48,81 +35,158 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
-### Windows 11 (PowerShell)
+On Windows, activate the virtual environment using the appropriate PowerShell or Command Prompt command. The requirements include `windows-curses` for Windows.
 
-Clone the repository using Git, or download and extract the ZIP archive from GitHub. Open PowerShell in the project folder, then run:
-
-```powershell
-py -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-```
-
-The `requirements.txt` file installs `windows-curses` automatically on Windows (and skips it on Linux). No separate installation command is needed. You do not need to activate the virtual environment when using the explicit Python path shown above.
-
-To select devices and start monitoring on Windows:
-
-```powershell
-.\.venv\Scripts\python.exe noah_watchdog.py setup --timeout 30
-.\.venv\Scripts\python.exe noah_watchdog.py run
-```
-
-The generic `python` commands in the sections below work on Linux after activating the virtual environment. On Windows, use the explicit `.\.venv\Scripts\python.exe` path instead, or activate the environment first.
-
-## Choose devices
+## Configure devices and recovery
 
 ```bash
 python noah_watchdog.py setup --timeout 30
 ```
 
-Use Up/Down to navigate, Space to select, and Enter to save. The selection is written to `noah_watchdog_devices.json` (excluded from Git). Previously selected devices that are temporarily not visible remain available for selection.
+Use **↑/↓** to move, **Space** to toggle a device or action, **Enter** to save, and **q** to cancel. On the recovery threshold line, each press of Space cycles **1 → 2 → 3 → 1**.
 
-## Run monitoring
+The menu provides these options:
+
+```text
+Maßnahmen:
+[x] Logging
+[ ] WLAN-Daten neu schreiben
+[ ] MQTT-Daten neu schreiben
+[ ] Datalogger NOAH neu starten
+    Automatischer Recoveryversuch nach [3] Zyklen
+```
+
+The selected recovery actions apply to all selected devices. Error counters are maintained per device. The configuration is saved in `noah_watchdog_devices.json`, which is excluded from Git. Existing v0.1.x device-list configurations are read and converted to the new format when saved.
+
+**Monitoring-only setup:** Leave Wi-Fi, MQTT and restart actions unchecked.
+
+## Credentials file
+
+When Wi-Fi or MQTT recovery is enabled, create `credentials.txt` in the same directory as `noah_watchdog.py`. Copy `credentials.example.txt` and edit it:
+
+```ini
+[WIFI]
+ssid = YourWiFiSSID
+password = YourWiFiPassword
+
+[MQTT]
+host = 192.168.2.10
+port = 1883
+```
+
+Wi-Fi credentials are needed only when Wi-Fi recovery is selected; MQTT host and port are needed only when MQTT recovery is selected. The same target values apply to all devices.
+
+On Linux:
+
+```bash
+chmod 600 credentials.txt
+ls -l credentials.txt
+```
+
+The file must be **owned by the user running the watchdog** and readable by that user. For example, if it was created using `sudo` and belongs to `root`, correct its ownership (substitute your username):
+
+```bash
+sudo chown "$USER":"$USER" credentials.txt
+chmod 600 credentials.txt
+```
+
+The program rejects credentials files accessible to group/other users on non-Windows systems. It does not currently provide a distinct diagnostic for every file permission failure.
+
+**Never commit `credentials.txt`.** The supplied `.gitignore` excludes it, as well as logs and local device configuration. Check `git status` before publishing. Do not include credentials in screenshots, issue reports or diagnostic output.
+
+## Run
 
 ```bash
 python noah_watchdog.py run
 ```
 
-The default cycle interval is five minutes and the BLE discovery scan is eight seconds. Override these values if needed:
+Defaults: five-minute polling cycle and eight-second BLE discovery scan. Optional arguments:
 
 ```bash
 python noah_watchdog.py run --minutes 5 --scan-timeout 15
 ```
 
-Results are printed to the console and appended to `noah_watchdog.log`. To follow the log on Linux:
+Output is written to the console and `noah_watchdog.log`. With the **Logging** option disabled, routine per-device lines are suppressed, but recovery outcomes and errors remain logged.
+
+To run in the background after an SSH session closes:
 
 ```bash
-tail -f noah_watchdog.log
+nohup python -u noah_watchdog.py run >> watchdog_console.log 2>&1 < /dev/null &
 ```
 
-On Windows (PowerShell):
-
-```powershell
-Get-Content .\noah_watchdog.log -Wait -Tail 20
-```
-
-On Linux, to keep the monitor running after closing a remote shell:
+Inspect the output:
 
 ```bash
-nohup python -u noah_watchdog.py run > watchdog_console.log 2>&1 < /dev/null &
+tail -f watchdog_console.log
 ```
 
-Avoid starting multiple copies at the same time: concurrent BLE connections can interfere with monitoring. Stop the existing process before starting another.
+Find a running instance:
 
-## What "read-only" means
+```bash
+pgrep -af 'python.*noah_watchdog'
+```
 
-The watchdog queries device status and does not request changes to Wi-Fi/MQTT settings. The underlying BLE protocol requires an authentication exchange, which includes a protocol-level write. The bundled `growatt_ble.py` also offers a separate manual `config` command capable of modifying settings; **the watchdog does not invoke those operations**.
+Stop an existing instance using `kill <PID>` before starting a replacement. Avoid multiple watchdog instances competing for BLE connections. `nohup` does **not** automatically restart the program after a reboot or crash; use a systemd service for unattended operation after testing.
 
-## Limitations
+## Experimental recovery behavior
 
-- BLE availability is not equivalent to Wi-Fi/MQTT connectivity.
-- A NOAH that is asleep or powered down may not appear during discovery.
-- Current status codes should be treated as observations, not definitive diagnostic labels.
-- This is experimental software, not a guaranteed recovery or safety system.
+The current implementation treats a poll as **abnormal** when:
+
+```text
+wifi_status == "0" AND connection_state is neither "16" nor empty
+```
+
+These are **provisional project heuristics**, not confirmed Growatt diagnostic specifications. In particular, `wifi_status=0` has also been observed during normal operation.
+
+- Each abnormal poll increments that device's consecutive-error counter.
+- A healthy or inconclusive poll resets its counter.
+- If a device is not BLE-visible, its counter is reset and no recovery is attempted.
+- When the counter reaches the configured threshold, selected actions execute **in the same polling cycle**.
+- With threshold **1**, the first abnormal poll triggers recovery immediately; with threshold **2** or **3**, two or three consecutive abnormal polls are required.
+- Wi-Fi recovery writes the configured SSID and password.
+- MQTT recovery reads the current host and port, and writes only values that differ from the configured targets.
+- Datalogger restart sends the restart command via BLE.
+- The program waits 30 seconds, reconnects via BLE, and reads `connection_state` again. A value of `16` is reported as success; other values or a failed control query are reported as unsuccessful.
+- After an attempt, the error counter resets; another attempt cannot occur before the next polling cycle.
+
+Actions are performed in this order: **Wi-Fi → MQTT → restart**. Only checked actions are executed. The watchdog cannot restore connectivity while the access point or broker remains unavailable.
+
+**Important limitation:** The current success criterion checks only the NOAH's BLE-reported `connection_state`; it does **not** independently verify Wi-Fi association, MQTT broker reachability, or message delivery. Also, a recovery sequence can be interrupted by BLE disconnects or timeouts.
+
+## Safety and testing
+
+1. Start with **Logging** enabled and all recovery actions disabled.
+2. Confirm that the selected NOAHs are queried correctly.
+3. Enable **one** recovery action at a time for controlled tests.
+4. Observe the recovery logs and check the NOAH's actual behavior separately.
+5. Keep backups of `noah_watchdog_devices.json` and existing scripts before upgrading.
+
+Do not rely on this experimental software as a safety system or a guaranteed connectivity repair mechanism.
+
+## Repository files
+
+| File | Purpose |
+| --- | --- |
+| `noah_watchdog.py` | Device selection, monitoring and experimental recovery |
+| `growatt_ble.py` | BLE client / CLI based on Peter Meiser's work |
+| `protocol.py` | Reverse-engineered Growatt BLE protocol |
+| `credentials.example.txt` | Template for local Wi-Fi/MQTT target settings |
+| `requirements.txt` | Python dependencies |
+| `.gitignore` | Excludes credentials, local configuration, logs and environment |
+| `LICENSE` / `NOTICE` | License and attribution notices |
+
+## Known limitations / planned improvements
+
+- Validate the meaning of status values and the effectiveness of each recovery action against real hardware.
+- Improve credentials-file error messages, especially when file ownership or permissions are incorrect.
+- Consider recovery cooldowns/backoff and safer behavior during prolonged network outages.
+- Add tests for status handling, configuration parsing and recovery thresholds.
+- Consider a systemd service for reliable unattended startup.
 
 ## Credits and license
 
-BLE protocol reverse engineering and the bundled `protocol.py` and `growatt_ble.py` originate from **Peter Meiser's** [Growatt NOAH (Bluetooth) for Home Assistant](https://github.com/meiser79/growatt_noah_ble) project, copyright 2026 Peter Meiser. The watchdog application (`noah_watchdog.py`) is a separate monitoring program built on those components.
+The reverse-engineered BLE protocol and bundled `protocol.py` and `growatt_ble.py` originate from **Peter Meiser's** [Growatt NOAH (Bluetooth) for Home Assistant](https://github.com/meiser79/growatt_noah_ble) project, copyright 2026 Peter Meiser. The watchdog application is an independent program built on those components.
 
-The original `LICENSE` (Apache License, Version 2.0) and original `NOTICE` are included. Attribution and original notices are retained. The original NOTICE mentions artwork in the upstream Home Assistant integration; that artwork is not included in this repository.
+Keep the repository's **Apache License 2.0** `LICENSE` and its `NOTICE` file when publishing the update. Retain the original attribution and any notices of modifications where required. The original NOTICE references artwork from the upstream Home Assistant integration; that artwork is not distributed here.
 
 This project is independently maintained and is not affiliated with, endorsed by, or sponsored by Growatt New Energy Co., Ltd. Product names and trademarks belong to their respective owners.

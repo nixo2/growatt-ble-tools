@@ -226,7 +226,11 @@ __marimo__/
 noah_watchdog_devices.json
 noah_watchdog.log
 watchdog_console.log
+.venv/
+__pycache__/
+*.pyc
 *.log
+credentials.txt
 
 # Local environment and secrets
 .env
