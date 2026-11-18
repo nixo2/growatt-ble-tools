@@ -1,0 +1,21 @@
+# NOAH BLE Registerliste (Input und Holding Registers)
+# Register|Bezeichnung|Faktor/Berechnung|Einheit|Registertyp
+Register|Bezeichnung|Faktor|Einheit|Registertyp
+21-28|Seriennummer|ASCII||I
+29|SOC Bat.1|1|%|I
+30|Temp. Bat.1|*0.1 -273.1|°C|I
+92|PV1-Spannung|0.01|V|I
+93|PV1-Strom|0.01|A|I
+95|PV2-Spannung|0.01|V|I
+96|PV2-Strom|0.01|A|I
+7|PV-Leistung-gesamt|1|W|I
+8|Modus|1|0 Load First, 1 Battery First, 2 Smart Self-Use|I
+10|Akku-Status|1|0 Idle, 1 Laden, 2 Entladen|I
+11|Ladeleistung|*1 -30000|W|I
+
+# Zeitplan Slot 1
+254|Slot1 Startzeit|TIME||H
+255|Slot1 Endzeit|TIME||H
+256|Slot1 Betriebsart|1|0 Load First, 1 Battery First, 2 Smart Self-Use|H
+257|Slot1 Ausgangsleistung|1|W|H
+258|Slot1 Aktiviert|1|0 Aus, 1 Ein|H
