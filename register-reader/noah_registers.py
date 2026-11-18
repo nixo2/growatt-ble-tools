@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Experimental Growatt NOAH BLE register diagnostic (v0.5.6).
+"""Experimental Growatt NOAH BLE register diagnostic (v0.5.7).
 
 Requires the unmodified protocol.py and growatt_ble.py from the watchdog project.
 Based on the unofficial NEXA/NOAH protocol specification, section 8.10.
@@ -556,7 +556,7 @@ async def read_config_parameter(address):
     print('\nGrowatt-Konfigurationsparameter lesen (Funktion 0x19, nur lesend).')
     print('Hinweis: Parameter-IDs sind keine Input-/Holding-Register.')
     print('Bekannte Beispiele: 55 Routerstatus, 60 Serverstatus, 61 SDK-Version, 80 Update-URL.')
-    print('Sensible Parameter (z.B. 54 BLE-Schlüssel, 57 WLAN-Passwort) werden nicht angezeigt.')
+    print('Alle Parameter-IDs sind abfragbar. Achtung: Ausgaben können Zugangsdaten enthalten!')
     raw = input('Parameter-ID [dezimal oder 0x..., Enter=Abbruch]: ').strip()
     if not raw:
         return
@@ -567,9 +567,6 @@ async def read_config_parameter(address):
         return
     if not 0 <= param_id <= 65535:
         print('Parameter-ID muss zwischen 0 und 65535 liegen.')
-        return
-    if param_id in (54, 57):
-        print('Dieser Parameter enthält Zugangsdaten/Schlüssel; Ausgabe aus Sicherheitsgründen gesperrt.')
         return
     print(f'\nLese Konfigurationsparameter {param_id} (0x{param_id:04X}) ...')
     async with NoahBle(address) as noah:
@@ -602,7 +599,7 @@ async def read_config_parameter(address):
 
 
 async def interactive_menu():
-    print('\nNOAH BLE REGISTER TOOL v0.5.6 (experimentell)')
+    print('\nNOAH BLE REGISTER TOOL v0.5.7 (experimentell)')
     while True:
         selected = await select_live_device(8)
         if selected is None:
