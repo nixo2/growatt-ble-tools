@@ -1,6 +1,6 @@
 # Growatt NOAH BLE Register Reader
 
-**Experimental diagnostic and register-access tool — v0.5.6**
+**Experimental diagnostic and register-access tool — v0.5.7**
 
 A command-line utility for exploring Growatt NOAH devices locally over Bluetooth Low Energy (BLE), without requiring Growatt cloud access. This tool complements the [NOAH BLE Watchdog](../README.md) in the same repository.
 
