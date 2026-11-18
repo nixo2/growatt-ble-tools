@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Growatt NOAH BLE Watchdog v0.2.0 – experimental, opt-in recovery."""
+"""Growatt NOAH BLE Watchdog v0.3.0 – experimental, opt-in recovery."""
 import argparse
 import asyncio
 import configparser
