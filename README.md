@@ -4,7 +4,7 @@ Experimental standalone Bluetooth Low Energy (BLE) monitoring and **opt-in recov
 
 Built on the BLE protocol implementation by [Peter Meiser](https://github.com/meiser79/growatt_noah_ble).
 
-> **v0.2.0 — Experimental Recovery (test version).** Monitoring has been tested with three NOAH devices. Automatic Wi-Fi/MQTT reconfiguration and datalogger restart are experimental and have **not yet been validated as reliable recovery methods**. Recovery actions are disabled by default.
+> **v0.3.0 — Experimental release; first observed automatic Wi-Fi recovery.** On November 18, 2026, the watchdog detected `connection_state=0`, reapplied the configured Wi-Fi credentials and subsequently observed `connection_state=16` during its follow-up BLE check. This is one documented successful recovery sequence, not proof that the Wi-Fi action alone caused the reconnection or that recovery is reliable in all conditions. MQTT reconfiguration and datalogger restart have not been similarly validated. Recovery actions remain disabled by default.
 
 ## Features
 
@@ -17,6 +17,17 @@ Built on the BLE protocol implementation by [Peter Meiser](https://github.com/me
 - Choose a threshold of **1, 2, or 3 consecutive abnormal polling cycles**, counted separately for each device.
 - Check `connection_state` again **30 seconds** after recovery actions.
 - Keep devices that are not visible in a BLE scan from being treated as network failures.
+
+## Additional tool: NOAH BLE Register Reader
+
+The [`register-reader/`](register-reader/) directory contains a **separate, experimental** diagnostic utility (`noah_registers.py`) and its own [README](register-reader/README.md). It supports:
+
+- Reading selected Modbus registers defined in `registers.txt`.
+- Manually reading input/holding registers and experimentally writing holding registers.
+- Sending a BLE datalogger restart request.
+- Querying Growatt configuration parameters via BLE function `0x19` (distinct from Modbus registers).
+
+The reader uses the shared `protocol.py` and `growatt_ble.py` from this repository. Some responses and write effects remain unverified; configuration query output may include secrets. **Do not share unredacted diagnostic output.** See its own README for usage and limitations.
 
 ## Requirements
 
@@ -153,6 +164,21 @@ Actions are performed in this order: **Wi-Fi → MQTT → restart**. Only checke
 
 **Important limitation:** The current success criterion checks only the NOAH's BLE-reported `connection_state`; it does **not** independently verify Wi-Fi association, MQTT broker reachability, or message delivery. Also, a recovery sequence can be interrupted by BLE disconnects or timeouts.
 
+## Observed recovery event (2026-11-18)
+
+One real-device log sequence showed the following behavior (times are local):
+
+| Time | Watchdog observation |
+| --- | --- |
+| 14:21:23 | BLE query reported `wifi_status=0`, `connection_state=0`. |
+| 14:21:23 | `RECOVERY START` after one abnormal polling cycle. |
+| 14:21:25 | Wi-Fi credentials were retransmitted. |
+| 14:21:27 | Watchdog logged the Wi-Fi recovery action and started its 30-second wait. |
+| 14:22:02 | Follow-up BLE query reported `connection_state=16`; watchdog logged `RECOVERY ERFOLGREICH`. |
+| 14:26:24 | Subsequent routine query still reported `connection_state=16`. |
+
+This supports that **detection, configured recovery execution, and the BLE-based success check operated as designed in this case**. It does not establish causation (the device could also have recovered independently), independent MQTT connectivity, or long-term reliability.
+
 ## Safety and testing
 
 1. Start with **Logging** enabled and all recovery actions disabled.
@@ -168,6 +194,7 @@ Do not rely on this experimental software as a safety system or a guaranteed con
 | File | Purpose |
 | --- | --- |
 | `noah_watchdog.py` | Device selection, monitoring and experimental recovery |
+| `register-reader/` | Separate experimental BLE register/configuration diagnostic and documentation |
 | `growatt_ble.py` | BLE client / CLI based on Peter Meiser's work |
 | `protocol.py` | Reverse-engineered Growatt BLE protocol |
 | `credentials.example.txt` | Template for local Wi-Fi/MQTT target settings |
@@ -177,7 +204,7 @@ Do not rely on this experimental software as a safety system or a guaranteed con
 
 ## Known limitations / planned improvements
 
-- Validate the meaning of status values and the effectiveness of each recovery action against real hardware.
+- Further validate the meaning of status values and recovery behavior across more devices and failure scenarios; one Wi-Fi recovery sequence has been observed, while MQTT recovery and datalogger restart still need independent validation.
 - Improve credentials-file error messages, especially when file ownership or permissions are incorrect.
 - Consider recovery cooldowns/backoff and safer behavior during prolonged network outages.
 - Add tests for status handling, configuration parsing and recovery thresholds.
