@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Experimental Growatt NOAH BLE register diagnostic (v0.5.7).
+"""Experimental Growatt NOAH BLE register diagnostic (v0.5.8).
 
 Requires the unmodified protocol.py and growatt_ble.py from the watchdog project.
 Based on the unofficial NEXA/NOAH protocol specification, section 8.10.
@@ -117,6 +117,12 @@ async def select_live_device(seconds):
 def parse_formula(source, lineno):
     """Return a safe Decimal transformation for raw register values."""
     expr = source.strip().replace('−', '-').replace('–', '-').replace(',', '.')
+    bit_match = re.fullmatch(r'bit\s*(\d{1,2})\s*-\s*(\d{1,2})', expr, re.I)
+    if bit_match:
+        high, low = map(int, bit_match.groups())
+        if not 0 <= low <= high <= 15:
+            raise ValueError(f'Zeile {lineno}: Bitbereich muss 0..15 sein, absteigend (z.B. bit9-0)')
+        return ('BITS', high, low)
     if not expr or expr.upper() in ('ASCII', 'TIME'):
         return None if not expr else expr.upper()
     # Legacy factors (0.01, 1) are multiplication factors.
@@ -175,6 +181,10 @@ def load_registers(path):
         cols = [v.strip() for v in line.split('|')]
         if len(cols) in (4, 5) and [c.lower() for c in cols[:4]] == ['register', 'bezeichnung', 'faktor', 'einheit']:
             continue
+        # Accept an optional sixth column for a descriptive bit label, e.g.
+        # 14|Heizung|1|bit3-0|Akku4-1|I
+        if len(cols) == 6 and re.fullmatch(r'bit\s*\d{1,2}\s*-\s*\d{1,2}', cols[3], re.I):
+            cols = [cols[0], cols[1], cols[3], cols[4], cols[5]]
         if len(cols) not in (4, 5):
             raise ValueError(f'{path.name}:{lineno}: erwartet Register|Bezeichnung|Faktor|Einheit[|Registertyp]')
         reg_text, label, factor_text, unit = cols[:4]
@@ -222,11 +232,25 @@ def display_value(values, formula, unit):
         hours, minutes = raw >> 8, raw & 0xFF
         if hours > 23 or minutes > 59:
             raise ValueError(f'ungültige HH:MM-Codierung: 0x{raw:04X}')
-        return f'{hours:02d}:{minutes:02d}', ''
+        return f'{hours:02d}:{minutes:02d}', unit
     if formula == 'ASCII':
         # Modbus words are big-endian; combine in the order from registers.txt.
         raw = b''.join(struct.pack('>H', word) for word in values)
         return raw.rstrip(b'\x00').decode('ascii', errors='replace'), ''
+    if isinstance(formula, tuple) and formula[0] == 'BITS':
+        _, high, low = formula
+        raw = values[0]
+        masked = (raw >> low) & ((1 << (high - low + 1)) - 1)
+        return format(masked, f'0{high - low + 1}b'), unit
+    # Also allow bit3-0 in the unit column with factor 1.
+    unit_bits = re.fullmatch(r'bit\s*(\d{1,2})\s*-\s*(\d{1,2})', unit, re.I)
+    if unit_bits:
+        high, low = map(int, unit_bits.groups())
+        if not 0 <= low <= high <= 15:
+            raise ValueError('Bitbereich muss 0..15 sein')
+        raw = values[0]
+        masked = (raw >> low) & ((1 << (high - low + 1)) - 1)
+        return format(masked, f'0{high - low + 1}b'), ''
     value = formula(Decimal(values[0])) if formula else Decimal(values[0])
     if not value.is_finite():
         raise ValueError('Ergebnis ist nicht endlich')
@@ -599,7 +623,7 @@ async def read_config_parameter(address):
 
 
 async def interactive_menu():
-    print('\nNOAH BLE REGISTER TOOL v0.5.7 (experimentell)')
+    print('\nNOAH BLE REGISTER TOOL v0.5.8 (experimentell)')
     while True:
         selected = await select_live_device(8)
         if selected is None:

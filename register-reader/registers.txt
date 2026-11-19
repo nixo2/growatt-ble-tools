@@ -2,8 +2,17 @@
 # Register|Bezeichnung|Faktor/Berechnung|Einheit|Registertyp
 Register|Bezeichnung|Faktor|Einheit|Registertyp
 21-28|Seriennummer|ASCII||I
+12|Stapel|1|Stück|I
+15|Akkupack Fehler|bit9-0|Pack10-1|I
+13|SOC Total|1|%|I
 29|SOC Bat.1|1|%|I
+41|SOC Bat.2|1|%|I
+53|SOC Bat.3|1|%|I
+65|SOC Bat.4|1|%|I
+90|Ladegrenze|1|%|I
+91|Entladegrenze|1|%|I
 30|Temp. Bat.1|*0.1 -273.1|°C|I
+14|Heizung|bit3-0|Akku4-1|I
 92|PV1-Spannung|0.01|V|I
 93|PV1-Strom|0.01|A|I
 95|PV2-Spannung|0.01|V|I
@@ -14,8 +23,8 @@ Register|Bezeichnung|Faktor|Einheit|Registertyp
 11|Ladeleistung|*1 -30000|W|I
 
 # Zeitplan Slot 1
-254|Slot1 Startzeit|TIME||H
-255|Slot1 Endzeit|TIME||H
+254|Slot1 Startzeit|TIME|Uhr|H
+255|Slot1 Endzeit|TIME|Uhr|H
 256|Slot1 Betriebsart|1|0 Load First, 1 Battery First, 2 Smart Self-Use|H
 257|Slot1 Ausgangsleistung|1|W|H
 258|Slot1 Aktiviert|1|0 Aus, 1 Ein|H
