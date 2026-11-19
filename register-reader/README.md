@@ -1,12 +1,12 @@
 # Growatt NOAH BLE Register Reader
 
-**Experimental register diagnostic and exploration tool — v0.6.3**
+**Experimental register diagnostic and exploration tool — v0.6.5**
 
 Read and explore Growatt NOAH registers locally over Bluetooth Low Energy (BLE), without depending on Growatt cloud access. This utility complements the [NOAH BLE Watchdog](../README.md).
 
 > **Experimental / use at your own risk.** Register addresses and meanings may vary between devices and firmware versions. Reading is intended to be non-destructive, but manual **holding-register writes** and **datalogger restarts** can change device behavior or interrupt connectivity. Use only on equipment you own or are authorized to manage. This is an unofficial project, not affiliated with Growatt.
 
-## What's new in v0.6.3
+## What's new in v0.6.5
 
 The register reader has received several improvements since v0.5.7:
 
@@ -16,6 +16,8 @@ The register reader has received several improvements since v0.5.7:
 - **v0.6.1:** Register ranges are displayed as aligned **decimal and hexadecimal rows**, rather than one very long combined value.
 - **v0.6.2:** **Adaptive fallback** probes the first and last register of a failed block. If both fail, the remaining registers are queried individually; otherwise the block is split. A range with zero successful values is marked `NICHT LESBAR`, not `TEILWEISE`.
 - **v0.6.3:** New `start->count` register syntax, e.g. `100->16` is equivalent to `100-115`.
+- **v0.6.4:** corrected Display Issues
+- **v0.6.5:** corrected Display Issues
 
 These changes primarily improve register-list parsing, diagnostic reads and display. The existing manual write/restart functions remain available.
 
