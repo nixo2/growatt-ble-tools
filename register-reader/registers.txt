@@ -11,6 +11,8 @@ Register|Bezeichnung|Faktor|Einheit|Registertyp
 65|SOC Bat.4|1|%|I
 90|Ladegrenze|1|%|I
 91|Entladegrenze|1|%|I
+99|Zellspannung max.|*0.001|V|I
+100|Zellspannung min.|*0.001|V|I
 30|Temp. Bat.1|*0.1 -273.1|°C|I
 14|Heizung|bit3-0|Akku4-1|I
 92|PV1-Spannung|0.01|V|I

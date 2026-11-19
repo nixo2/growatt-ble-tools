@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Experimental Growatt NOAH BLE register diagnostic (v0.5.8).
+"""Experimental Growatt NOAH BLE register diagnostic (v0.6.5).
 
 Requires the unmodified protocol.py and growatt_ble.py from the watchdog project.
 Based on the unofficial NEXA/NOAH protocol specification, section 8.10.
@@ -123,7 +123,7 @@ def parse_formula(source, lineno):
         if not 0 <= low <= high <= 15:
             raise ValueError(f'Zeile {lineno}: Bitbereich muss 0..15 sein, absteigend (z.B. bit9-0)')
         return ('BITS', high, low)
-    if not expr or expr.upper() in ('ASCII', 'TIME'):
+    if not expr or expr.upper() in ('ASCII', 'TIME', 'HEX'):
         return None if not expr else expr.upper()
     # Legacy factors (0.01, 1) are multiplication factors.
     if re.fullmatch(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)', expr):
@@ -195,11 +195,18 @@ def load_registers(path):
             expanded = []
             for item in reg_text.split(','):
                 item = item.strip()
-                match = re.fullmatch(r'(\d+)\s*-\s*(\d+)', item)
-                if match:
-                    first, last = map(int, match.groups())
-                    if first > last:
-                        raise ValueError('absteigender Registerbereich')
+                # Start->Anzahl: 100->16 entspricht 100-115.
+                count_match = re.fullmatch(r'(\d+)\s*->\s*(\d+)', item)
+                range_match = re.fullmatch(r'(\d+)\s*-\s*(\d+)', item)
+                if count_match:
+                    first, count = map(int, count_match.groups())
+                    if count < 1 or first > 65535 or count > 65536 - first:
+                        raise ValueError('ungültige Registeranzahl oder Bereichsende')
+                    expanded.extend(range(first, first + count))
+                elif range_match:
+                    first, last = map(int, range_match.groups())
+                    if first > last or last > 65535:
+                        raise ValueError('ungültiger Registerbereich')
                     expanded.extend(range(first, last + 1))
                 else:
                     expanded.append(int(item, 10))
@@ -218,8 +225,8 @@ def load_registers(path):
             formula = 'TIME'
         if formula == 'ASCII' and not regs:
             raise ValueError(f'{path.name}:{lineno}: ASCII benötigt Register')
-        if len(regs) > 1 and formula != 'ASCII':
-            raise ValueError(f'{path.name}:{lineno}: mehrere Register derzeit nur mit ASCII unterstützt')
+        if len(regs) > 1 and (formula == 'TIME' or isinstance(formula, tuple)):
+            raise ValueError(f'{path.name}:{lineno}: TIME und Bitmasken benötigen ein einzelnes Register')
         entries.append((regs, label, formula, unit, register_type))
     if not entries:
         raise ValueError('Registerdatei enthält keine Register')
@@ -237,6 +244,23 @@ def display_value(values, formula, unit):
         # Modbus words are big-endian; combine in the order from registers.txt.
         raw = b''.join(struct.pack('>H', word) for word in values)
         return raw.rstrip(b'\x00').decode('ascii', errors='replace'), ''
+    if formula == 'HEX':
+        # Each Modbus register is a 16-bit word (high byte first).
+        return ' '.join(f'{byte:02X}' for word in values for byte in (word >> 8, word & 0xFF)), unit
+    if len(values) > 1:
+        # Keep each register in its original order. Show decimal/scaled values
+        # as requested by the factor, plus a byte-separated hexadecimal dump.
+        rendered_values = []
+        for raw in values:
+            value = formula(Decimal(raw)) if formula else Decimal(raw)
+            if not value.is_finite():
+                raise ValueError('Ergebnis ist nicht endlich')
+            shown = format(value, 'f')
+            if '.' in shown:
+                shown = shown.rstrip('0').rstrip('.')
+            rendered_values.append(shown)
+        hex_bytes = ' '.join(f'{byte:02X}' for word in values for byte in (word >> 8, word & 0xFF))
+        return ' '.join(rendered_values) + '  [HEX: ' + hex_bytes + ']', unit
     if isinstance(formula, tuple) and formula[0] == 'BITS':
         _, high, low = formula
         raw = values[0]
@@ -358,38 +382,99 @@ async def read_list(args):
                 raise ValueError(status)
             return words
 
-        for kind, start, count in blocks:
+        # Adaptive fallback: probe both edges of a failed block. If neither
+        # edge is readable, try the remaining words individually instead of
+        # recursively generating many more failed block requests.
+        # Cached single-register probes are never sent twice.
+        probed = {}  # (kind, register) -> True (readable) / False (unreadable)
+
+        async def fetch_single(kind, reg):
+            key = (kind, reg)
+            if key in probed:
+                return probed[key]
+            try:
+                word = (await fetch(kind, reg, 1))[0]
+                probed[key] = True
+                if reg in wanted[kind]:
+                    values[key] = word
+                print(f'  {"I" if kind == 4 else "H"} {reg}-{reg}: OK', flush=True)
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except Exception as exc:
+                probed[key] = False
+                if reg in wanted[kind]:
+                    errors[key] = f'{type(exc).__name__}: {exc}'
+                print(f'  {"I" if kind == 4 else "H"} {reg}-{reg}: NICHT LESBAR '
+                      f'({type(exc).__name__}: {exc})', flush=True)
+            return probed[key]
+
+        async def fetch_range(kind, start, count):
+            if count == 1:
+                await fetch_single(kind, start)
+                return
             t0 = time.monotonic()
+            prefix = f'  {"I" if kind == 4 else "H"} {start}-{start + count - 1}'
             try:
                 words = await fetch(kind, start, count)
                 for offset, value in enumerate(words):
-                    if start + offset in wanted[kind]:
-                        values[(kind, start + offset)] = value
-                print(f'  {"I" if kind == 4 else "H"} {start}-{start + count - 1}: '
-                      f'OK ({time.monotonic() - t0:.2f}s)')
+                    reg = start + offset
+                    if reg in wanted[kind]:
+                        values[(kind, reg)] = value
+                    probed[(kind, reg)] = True
+                print(f'{prefix}: OK ({time.monotonic() - t0:.2f}s)', flush=True)
+                return
+            except (KeyboardInterrupt, SystemExit):
+                raise
             except Exception as exc:
-                print(f'  {"I" if kind == 4 else "H"} {start}-{start + count - 1}: '
-                      f'Block fehlgeschlagen ({type(exc).__name__}: {exc}); '
-                      'Einzelregister-Fallback')
-                for reg in range(start, start + count):
-                    if reg not in wanted[kind]:
-                        continue
-                    try:
-                        words = await fetch(kind, reg, 1)
-                        values[(kind, reg)] = words[0]
-                    except Exception as fallback_exc:
-                        errors[(kind, reg)] = (f'{type(fallback_exc).__name__}: '
-                                               f'{fallback_exc}')
+                reason = f'{type(exc).__name__}: {exc}'
+                print(f'{prefix}: Block nicht lesbar ({reason}); '
+                      'prüfe Randregister', flush=True)
+
+            left_ok = await fetch_single(kind, start)
+            right_ok = await fetch_single(kind, start + count - 1)
+            if not left_ok and not right_ok:
+                print(f'{prefix}: beide Randregister unlesbar; '
+                      'prüfe übrige Register einzeln', flush=True)
+                for reg in range(start + 1, start + count - 1):
+                    await fetch_single(kind, reg)
+                return
+
+            half = count // 2
+            print(f'{prefix}: mindestens ein Randregister lesbar; '
+                  f'teile in {start}-{start + half - 1} und '
+                  f'{start + half}-{start + count - 1}', flush=True)
+            await fetch_range(kind, start, half)
+            await fetch_range(kind, start + half, count - half)
+
+        for block_number, (kind, start, count) in enumerate(blocks, 1):
+            print(f'Block {block_number}/{len(blocks)} wird geprüft ...', flush=True)
+            await fetch_range(kind, start, count)
 
     results = []
     for regs, label, formula, unit, typ in entries:
         kind = 4 if typ == 'I' else 3
         missing = [reg for reg in regs if (kind, reg) not in values]
-        reg_label = ','.join(str(reg) for reg in regs)
+        reg_label = (f'{regs[0]}-{regs[-1]}' if len(regs) > 1 and regs == tuple(range(regs[0], regs[-1] + 1)) else ','.join(str(reg) for reg in regs))
         if missing:
-            error = '; '.join(f'{reg}: {errors.get((kind, reg), "kein Wert")}'
-                              for reg in missing)
-            results.append((reg_label, label, '—', unit, error))
+            # Show all successfully read words even when some registers fail.
+            # ?? marks unknown bytes (one 16-bit Modbus register = two bytes).
+            words = [values.get((kind, reg)) for reg in regs]
+            if len(regs) > 1:
+                if formula == 'HEX':
+                    rendered = ' '.join(f'{word:04X}'[:2] + ' ' + f'{word:04X}'[2:]
+                                        if word is not None else '?? ??' for word in words)
+                elif formula == 'ASCII':
+                    rendered = ' '.join('??' if word is None else
+                                        struct.pack('>H', word).decode('ascii', errors='replace')
+                                        for word in words)
+                else:
+                    rendered = ' '.join('?' if word is None else str(word) for word in words)
+                readable = len(regs) - len(missing)
+                status = (f'TEILWEISE ({readable}/{len(regs)} Register)' if readable
+                          else f'NICHT LESBAR (0/{len(regs)} Register)')
+                results.append((reg_label, label, rendered, unit, status))
+            else:
+                results.append((reg_label, label, '—', unit, 'NICHT LESBAR'))
             continue
         try:
             rendered, shown_unit = display_value([values[(kind, reg)] for reg in regs],
@@ -398,15 +483,48 @@ async def read_list(args):
         except (ValueError, InvalidOperation, ZeroDivisionError, UnicodeError) as exc:
             results.append((reg_label, label, '—', unit, f'Umrechnung: {exc}'))
 
+    # Register ranges: one row of decimal values and one aligned row of hex
+    # bytes. A fixed six-character cell keeps the two representations aligned.
+    # Single registers and ASCII/TIME/BITS keep the existing compact output.
     reg_width = max(5, *(len(reg) for reg, *_ in results))
     label_width = max(11, *(len(label) for _, label, *_ in results))
-    value_width = max(12, *(len(value) for _, _, value, _, _ in results))
+    prefix_width = reg_width + 2 + label_width + 2
+    # Display unit is the interpreted unit returned by display_value(), not
+    # the raw column from registers.txt (which can contain enum legends).
+    # Align compact single-register rows without widening the whole table
+    # to the length of multi-register scans.
+    value_width = max((len(result[2]) for entry, result in zip(entries, results)
+                       if len(entry[0]) == 1), default=5)
+    unit_width = max((len(result[3]) for entry, result in zip(entries, results)
+                      if len(entry[0]) == 1), default=4)
     print(f'{"Reg":>{reg_width}}  {"Bezeichnung":<{label_width}}  '
-          f'{"Wert":>{value_width}}  {"Einheit":<8}  Status')
-    print('-' * (reg_width + label_width + value_width + 32))
-    for reg, label, value, unit, status in results:
-        print(f'{reg:>{reg_width}}  {label:<{label_width}}  '
-              f'{value:>{value_width}}  {unit:<8}  {status}')
+          f'{"Wert":>{value_width}}  {"Einheit":<{unit_width}}  Status')
+    print('-' * min(120, prefix_width + 90))
+    for (regs, label, formula, unit, typ), (reg, _label, value, shown_unit, status) in zip(entries, results):
+        kind = 4 if typ == 'I' else 3
+        prefix = f'{reg:>{reg_width}}  {label:<{label_width}}  '
+        if len(regs) > 1 and formula not in ('ASCII', 'TIME'):
+            # Each cell is 5 chars wide, followed by one separator space.
+            # HEX: high byte then low byte, e.g. decimal 536 -> 02 18.
+            raw_words = [values.get((kind, number)) for number in regs]
+            decimal_cells = []
+            hex_cells = []
+            for raw in raw_words:
+                if raw is None:
+                    decimal_cells.append(f'{"?":>5}')
+                    hex_cells.append('?? ??')
+                    continue
+                try:
+                    converted = formula(Decimal(raw)) if callable(formula) else Decimal(raw)
+                    dec = format(converted, 'f').rstrip('0').rstrip('.') if '.' in format(converted, 'f') else format(converted, 'f')
+                except (ValueError, InvalidOperation, ZeroDivisionError):
+                    dec = '?'
+                decimal_cells.append(f'{dec:>5}')
+                hex_cells.append(f'{raw >> 8:02X} {raw & 0xFF:02X}')
+            print(prefix + ' '.join(decimal_cells) + (f'  {shown_unit}' if shown_unit else ''))
+            print(' ' * prefix_width + ' '.join(hex_cells) + f'  [{status}]')
+        else:
+            print(prefix + f'{value:>{value_width}}  {shown_unit:<{unit_width}}  [{status}]')
     print(f'\n{sum(status == "OK" for *_, status in results)}/{len(results)} '
           f'Einträge erfolgreich gelesen. {transactions} BLE-Abfragen, '
           f'{time.monotonic() - started:.2f}s insgesamt.')
@@ -623,7 +741,7 @@ async def read_config_parameter(address):
 
 
 async def interactive_menu():
-    print('\nNOAH BLE REGISTER TOOL v0.5.8 (experimentell)')
+    print('\nNOAH BLE REGISTER TOOL v0.6.5 (experimentell)')
     while True:
         selected = await select_live_device(8)
         if selected is None:
