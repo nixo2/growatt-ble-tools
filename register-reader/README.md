@@ -1,12 +1,12 @@
 # Growatt NOAH BLE Register Reader
 
-**Experimental register diagnostic and exploration tool — v0.6.3**
+**Experimental register diagnostic and exploration tool — v0.6.11**
 
 Read and explore Growatt NOAH registers locally over Bluetooth Low Energy (BLE), without depending on Growatt cloud access. This utility complements the [NOAH BLE Watchdog](../README.md).
 
 > **Experimental / use at your own risk.** Register addresses and meanings may vary between devices and firmware versions. Reading is intended to be non-destructive, but manual **holding-register writes** and **datalogger restarts** can change device behavior or interrupt connectivity. Use only on equipment you own or are authorized to manage. This is an unofficial project, not affiliated with Growatt.
 
-## What's new in v0.6.3
+## Version history (through v0.6.11)
 
 The register reader has received several improvements since v0.5.7:
 
@@ -16,6 +16,13 @@ The register reader has received several improvements since v0.5.7:
 - **v0.6.1:** Register ranges are displayed as aligned **decimal and hexadecimal rows**, rather than one very long combined value.
 - **v0.6.2:** **Adaptive fallback** probes the first and last register of a failed block. If both fail, the remaining registers are queried individually; otherwise the block is split. A range with zero successful values is marked `NICHT LESBAR`, not `TEILWEISE`.
 - **v0.6.3:** New `start->count` register syntax, e.g. `100->16` is equivalent to `100-115`.
+- **v0.6.4–v0.6.5:** Aligned table columns and fixed output of enumeration labels; corrected a crash when a list contains only multi-register ranges.
+- **v0.6.6:** Layout directives in `registers.txt`: headings, section labels, separator lines and blank lines.
+- **v0.6.7:** Comma-separated, noncontiguous register lists are displayed as individually converted values in one row, without an automatic hex row.
+- **v0.6.8:** Optional `NULL0`, `NULL65535` and `NULL0,65535` raw-value sentinels, rendered as `-` before conversion.
+- **v0.6.9:** Corrected alignment of multi-value rows with other table columns.
+- **v0.6.10:** Bit-field direction follows the requested order: `bit9-0` (bit 0 right) or `bit0-9` (bit 0 left), within a 16-bit register.
+- **v0.6.11:** Optional `NOHEX` modifier suppresses the secondary hexadecimal row for numeric ranges.
 
 These changes primarily improve register-list parsing, diagnostic reads and display. The existing manual write/restart functions remain available.
 
@@ -24,7 +31,9 @@ These changes primarily improve register-list parsing, diagnostic reads and disp
 - Discover nearby NOAH devices over BLE and select a device interactively.
 - Read **input registers** (Modbus function `0x04`) and **holding registers** (`0x03`) through Growatt BLE passthrough function `0x17`.
 - Read a user-defined `registers.txt` list, including individual registers, ranges and overlapping ranges.
-- Decode decimal/scaled values, hexadecimal bytes, ASCII text, time values, enumerations and bit fields.
+- Decode decimal/scaled values, hexadecimal bytes, ASCII text, time values, enumerations and direction-aware bit fields.
+- Use optional raw-value sentinels (`NULL0`, etc.) and `NOHEX` output modifiers.
+- Organize the results table using headings, separators and blank lines from `registers.txt`.
 - Preserve successful register values even when neighboring registers are unreadable.
 - Manually read an individual register; optionally write a holding register (Modbus `0x06`) after explicit confirmation.
 - Request a datalogger restart and query Growatt configuration parameters via BLE.
@@ -105,15 +114,15 @@ Example:
 # Single registers and calculations
 12|Anzahl Akkupacks|1|Stück|I
 29|SOC Bat.1|1|%|I
-30|Temp. Bat.1|*0.1 -273.1|°C|I
+30,42,54,66|Temp. Bat.1-4|*0.1 -273.1 NULL0|°C|I
 92|PV1-Spannung|0.01|V|I
 
 # ASCII across several 16-bit registers
 21-28|Seriennummer|ASCII||I
 
 # Bit fields: bit 0 is the rightmost character
-15|Akkupack Fehler|bit9-0|Pack10-1|I
-14|Heizung|bit3-0|Akku4-1|I
+15|Zellen Fehler|bit0-9|Zellen 1-10|I
+14|Heizung|bit0-3|Akku 1-4|I
 
 # Enumerations
 8|Modus|1|0 Load First, 1 Battery First, 2 Smart Self-Use|I
@@ -121,6 +130,15 @@ Example:
 # Time values (unit is preserved)
 254|Slot1 Startzeit|TIME|Uhr|H
 255|Slot1 Endzeit|TIME|Uhr|H
+
+# Layout controls
+**[NOAH DATA]**
+**---40---**
+**LEER**
+
+# Multiple separate registers: one line, one conversion per register
+29,41,53,65|SOC Bat.1-4|1|%|I
+2,3,4|Fehler Intern, Netz, Output|1 NOHEX||I
 
 # Exploratory reads
 100->16|Suche|1||I
@@ -150,15 +168,39 @@ The parser rejects duplicate addresses **within a single definition**, invalid c
 | `ASCII` | Interpret register bytes as ASCII text |
 | `HEX` | Show bytes in hexadecimal, high byte first |
 | `TIME` | Decode one register as `HH:MM` (high byte = hour, low byte = minute) |
-| `bit9-0`, `bit3-0` | Show the specified bit range in binary, most significant bit left and LSB right |
+| `bit9-0`, `bit3-0` | Show bits in descending order (bit 0 on the right) |
+| `bit0-9`, `bit0-3`, `bit0-7` | Show bits in ascending order (bit 0 on the left) |
+| `*0.1 -273.1 NULL0` | Treat a raw zero as unavailable (`-`), otherwise apply the formula |
+| `1 NULL65535` / `1 NULL0,65535` | Treat specified raw values as unavailable |
+| `1 NOHEX` | Suppress the extra hex row for numeric multi-register output |
+| `*0.1 -273.1 NULL0 NOHEX` | Combine sentinel handling and output suppression |
 
-Bit masks operate on a **single 16-bit register**, with bit numbers 0–15. `TIME` also requires a single register. For example, raw value `5` with `bit3-0` displays `0101`; raw value `536` (`0x0218`) appears as bytes `02 18`.
+Bit masks operate on a **single 16-bit register**, with bit numbers 0–15; the number of displayed bits is determined by the endpoints. For raw value `5`, `bit3-0` displays `0101` and `bit0-3` displays `1010`. `TIME` also requires a single register. Raw value `536` (`0x0218`) appears as bytes `02 18` in a hex dump.
+
+`NULL...` is checked against each **raw register value before scaling**, not against the converted result. `-` means a deliberately suppressed sentinel value, whereas `?` means the register could not be read. Use `NULL0` only where zero is truly an unavailable-value marker: a battery SOC of 0% is a legitimate reading. The modifiers apply per value in comma-separated lists too. `NOHEX` is optional and leaves existing definitions unchanged.
 
 The reader also recognizes enum labels in the unit column, such as `0 Aus, 1 Ein`. An alternative six-column bit-mask notation is accepted for compatibility, e.g. `14|Heizung|1|bit3-0|Akku4-1|I`; the five-column form above is recommended.
 
+### Table layout directives
+
+Standalone lines wrapped in `**` control **display only** and do not trigger BLE requests:
+
+| Directive | Effect |
+| --- | --- |
+| `**NOAH DATA**` | Heading |
+| `**[BATTERY]**` | Section label (shown as `[BATTERY]`) |
+| `**---**` | Separator across the calculated table width |
+| `**---40---**` | Separator of 40 hyphens |
+| `**===40===**` | Separator of 40 equals signs |
+| `**LEER**` | Blank line |
+
+Explicit separator widths must be 1–200. Display directives preserve their positions in the source file while BLE requests are still grouped independently for efficiency.
+
 ## Register-range display
 
-For numeric register ranges, values are displayed horizontally in **two aligned rows**: decimal (or scaled) values above, hexadecimal bytes below. Each decimal/hex pair refers to the same register position.
+For **contiguous numeric register ranges** (`100-115`, `100->16`, or a contiguous comma list such as `2,3,4`), the default output uses **two aligned rows**: decimal (or scaled) values above, hexadecimal bytes below. Each decimal/hex pair refers to the same register position. Add `NOHEX` to the factor field to show only the converted values in one row.
+
+**Noncontiguous comma lists** (e.g. `30,42,54,66`) are displayed as individually converted, comma-separated values in a single aligned row without an automatic hex row. Explicit `HEX` output remains available. This distinction matters: `2,3,4` is contiguous and therefore needs `NOHEX` to suppress its hex row.
 
 Example (illustrative values):
 
@@ -183,7 +225,7 @@ The reader first groups requested addresses into blocks, separately for input an
 - `--block-size 16`: at most 16 registers per initial block (allowed: 1–32).
 - `--max-gap 2`: bridge up to two unrequested registers between nearby requested addresses (allowed: 0–8).
 
-When a block cannot be decoded, v0.6.3:
+When a block cannot be decoded, the current reader:
 
 1. Queries the **first** and **last** register individually.
 2. If **both** are unreadable, queries the remaining registers individually.
@@ -221,7 +263,18 @@ These are separate operations from reading `registers.txt`:
 | Configuration parameter query | Growatt BLE `0x19` | Read-only; may reveal sensitive values |
 | Datalogger restart | Growatt BLE `0x18`, parameter `0x20` | Explicit confirmation; reboot not guaranteed by GATT ACK |
 
-Configuration parameter IDs are **not** Modbus register addresses. For example, parameter `80` has returned a firmware-update URL on a tested device; that does **not** prove the linked firmware was installed or downloaded. The reader permits queries of all parameter IDs, including potentially sensitive ones; take care when sharing output.
+Configuration parameter IDs are **not** Modbus register addresses. For example, parameter `80` has returned a firmware-update URL on a tested device; that does **not** prove the linked firmware was installed or downloaded.
+
+### Observed time-related configuration parameters (read-only)
+
+Recent BLE `0x19` queries on a tested NOAH returned:
+
+| Config ID | Observed raw ASCII value | Interpretation / status |
+| --- | --- | --- |
+| `30` (`0x001E`) | `GMT+8` | Time-zone string; exact device semantics and DST behavior are not yet verified |
+| `31` (`0x001F`) | `2026-11-20 18:05:18` | Device date/time string, format `YYYY-MM-DD HH:MM:SS` |
+
+These are **observations from one device**, not a verified write specification. **v0.6.11 can query these parameters but cannot edit them.** Although BLE `0x18` is used for some configuration operations (including the experimental datalogger restart), the payload format and device behavior for writing parameter IDs 30 and 31 have **not** been established. Do not assume that a `0x19` query can simply be reversed into a safe write. Time-zone handling, UTC versus local clock semantics, and daylight-saving changes remain open research questions. The reader permits queries of all parameter IDs, including potentially sensitive ones; take care when sharing output.
 
 The datalogger restart and configuration-parameter query are available from the **interactive menu**, not separate CLI subcommands.
 
