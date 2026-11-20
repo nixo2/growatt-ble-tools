@@ -1,6 +1,7 @@
 # NOAH BLE Registerliste (Input und Holding Registers)
 # Register|Bezeichnung|Faktor/Berechnung|Einheit|Registertyp
 Register|Bezeichnung|Faktor|Einheit|Registertyp
+**[Noah Daten]**
 21-28|Seriennummer|ASCII||I
 12|Stapel|1|Stück|I
 15|Akkupack Fehler|bit9-0|Pack10-1|I
@@ -24,7 +25,9 @@ Register|Bezeichnung|Faktor|Einheit|Registertyp
 10|Akku-Status|1|0 Idle, 1 Laden, 2 Entladen|I
 11|Ladeleistung|*1 -30000|W|I
 
-# Zeitplan Slot 1
+**[Noah Einstellungen]**
+250|Ladegrenze|1|%|H
+251|Entladegrenze|1|%|H
 254|Slot1 Startzeit|TIME|Uhr|H
 255|Slot1 Endzeit|TIME|Uhr|H
 256|Slot1 Betriebsart|1|0 Load First, 1 Battery First, 2 Smart Self-Use|H
