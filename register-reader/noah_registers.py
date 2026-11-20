@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Experimental Growatt NOAH BLE register diagnostic (v0.6.5).
+"""Experimental Growatt NOAH BLE register diagnostic (v0.6.11).
 
 Requires the unmodified protocol.py and growatt_ble.py from the watchdog project.
 Based on the unofficial NEXA/NOAH protocol specification, section 8.10.
@@ -116,13 +116,26 @@ async def select_live_device(seconds):
 
 def parse_formula(source, lineno):
     """Return a safe Decimal transformation for raw register values."""
-    expr = source.strip().replace('−', '-').replace('–', '-').replace(',', '.')
+    # NULL<n> is an optional raw-value sentinel, evaluated before scaling.
+    # Examples: '*0.1 -273.1 NULL0', '1 NULL65535', '1 NULL0,65535'.
+    normalized = source.strip().replace('−', '-').replace('–', '-')
+    # Optional presentation flag, independent of NULL sentinels and arithmetic.
+    nohex = bool(re.search(r'(?<!\S)NOHEX(?!\S)', normalized, re.I))
+    normalized = re.sub(r'(?<!\S)NOHEX(?!\S)', '', normalized, flags=re.I).strip()
+    null_match = re.search(r'\s+NULL(\d+(?:\s*,\s*\d+)*)\s*$', normalized, re.I)
+    null_values = frozenset()
+    if null_match:
+        null_values = frozenset(int(x.strip()) for x in null_match.group(1).split(','))
+        if any(not 0 <= x <= 65535 for x in null_values):
+            raise ValueError(f'Zeile {lineno}: NULL-Rohwerte müssen 0..65535 sein')
+        normalized = normalized[:null_match.start()].strip() or '1'
+    expr = normalized.replace(',', '.')
     bit_match = re.fullmatch(r'bit\s*(\d{1,2})\s*-\s*(\d{1,2})', expr, re.I)
     if bit_match:
-        high, low = map(int, bit_match.groups())
-        if not 0 <= low <= high <= 15:
-            raise ValueError(f'Zeile {lineno}: Bitbereich muss 0..15 sein, absteigend (z.B. bit9-0)')
-        return ('BITS', high, low)
+        first, last = map(int, bit_match.groups())
+        if not 0 <= first <= 15 or not 0 <= last <= 15:
+            raise ValueError(f'Zeile {lineno}: Bitpositionen müssen 0..15 sein')
+        return ('BITS', first, last)
     if not expr or expr.upper() in ('ASCII', 'TIME', 'HEX'):
         return None if not expr else expr.upper()
     # Legacy factors (0.01, 1) are multiplication factors.
@@ -155,7 +168,11 @@ def parse_formula(source, lineno):
         raise ValueError(f'Zeile {lineno}: nicht erlaubter Formelausdruck')
     # Validate all nodes without requiring a particular input value.
     evaluate(tree, Decimal(1))
-    return lambda x: evaluate(tree, Decimal(x))
+    def transform(x):
+        return evaluate(tree, Decimal(x))
+    transform.null_raws = null_values
+    transform.nohex = nohex
+    return transform
 
 
 def parse_enum(text):
@@ -170,6 +187,34 @@ def parse_enum(text):
     return result if len(result) >= 2 else None
 
 
+def parse_layout_directive(line):
+    """Return (kind, payload) for standalone **...** display directives."""
+    if not (line.startswith('**') and line.endswith('**') and len(line) >= 4):
+        return None
+    body = line[2:-2].strip()
+    if not body:
+        raise ValueError('leerer Formatierungsbefehl')
+    if body.upper() == 'LEER':
+        return ('blank', '')
+    match = re.fullmatch(r'---(\d+)---', body)
+    if match:
+        width = int(match.group(1))
+        if not 1 <= width <= 200:
+            raise ValueError('Trennlinienbreite muss 1..200 sein')
+        return ('line', width)
+    if body == '---':
+        return ('line', None)
+    match = re.fullmatch(r'===(\d+)===', body)
+    if match:
+        width = int(match.group(1))
+        if not 1 <= width <= 200:
+            raise ValueError('Trennlinienbreite muss 1..200 sein')
+        return ('double', width)
+    if body.startswith('[') and body.endswith(']'):
+        return ('section', body[1:-1].strip())
+    return ('heading', body)
+
+
 def load_registers(path):
     if not path.is_file():
         raise ValueError(f'Registerdatei nicht gefunden: {path}')
@@ -177,6 +222,13 @@ def load_registers(path):
     for lineno, raw in enumerate(path.read_text(encoding='utf-8-sig').splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith('#'):
+            continue
+        try:
+            directive = parse_layout_directive(line)
+        except ValueError as exc:
+            raise ValueError(f'{path.name}:{lineno}: {exc}') from None
+        if directive is not None:
+            entries.append(((), directive, None, '', ''))
             continue
         cols = [v.strip() for v in line.split('|')]
         if len(cols) in (4, 5) and [c.lower() for c in cols[:4]] == ['register', 'bezeichnung', 'faktor', 'einheit']:
@@ -228,9 +280,13 @@ def load_registers(path):
         if len(regs) > 1 and (formula == 'TIME' or isinstance(formula, tuple)):
             raise ValueError(f'{path.name}:{lineno}: TIME und Bitmasken benötigen ein einzelnes Register')
         entries.append((regs, label, formula, unit, register_type))
-    if not entries:
+    if not any(regs for regs, *_ in entries):
         raise ValueError('Registerdatei enthält keine Register')
     return entries
+
+
+def is_null_raw(formula, raw):
+    return raw in getattr(formula, 'null_raws', ())
 
 
 def display_value(values, formula, unit):
@@ -252,6 +308,9 @@ def display_value(values, formula, unit):
         # as requested by the factor, plus a byte-separated hexadecimal dump.
         rendered_values = []
         for raw in values:
+            if is_null_raw(formula, raw):
+                rendered_values.append('-')
+                continue
             value = formula(Decimal(raw)) if formula else Decimal(raw)
             if not value.is_finite():
                 raise ValueError('Ergebnis ist nicht endlich')
@@ -260,21 +319,25 @@ def display_value(values, formula, unit):
                 shown = shown.rstrip('0').rstrip('.')
             rendered_values.append(shown)
         hex_bytes = ' '.join(f'{byte:02X}' for word in values for byte in (word >> 8, word & 0xFF))
+        if getattr(formula, 'nohex', False):
+            return ', '.join(rendered_values), unit
         return ' '.join(rendered_values) + '  [HEX: ' + hex_bytes + ']', unit
     if isinstance(formula, tuple) and formula[0] == 'BITS':
-        _, high, low = formula
+        _, first, last = formula
         raw = values[0]
-        masked = (raw >> low) & ((1 << (high - low + 1)) - 1)
-        return format(masked, f'0{high - low + 1}b'), unit
+        step = -1 if first > last else 1
+        return ''.join(str((raw >> bit) & 1) for bit in range(first, last + step, step)), unit
     # Also allow bit3-0 in the unit column with factor 1.
     unit_bits = re.fullmatch(r'bit\s*(\d{1,2})\s*-\s*(\d{1,2})', unit, re.I)
     if unit_bits:
-        high, low = map(int, unit_bits.groups())
-        if not 0 <= low <= high <= 15:
-            raise ValueError('Bitbereich muss 0..15 sein')
+        first, last = map(int, unit_bits.groups())
+        if not 0 <= first <= 15 or not 0 <= last <= 15:
+            raise ValueError('Bitpositionen müssen 0..15 sein')
         raw = values[0]
-        masked = (raw >> low) & ((1 << (high - low + 1)) - 1)
-        return format(masked, f'0{high - low + 1}b'), ''
+        step = -1 if first > last else 1
+        return ''.join(str((raw >> bit) & 1) for bit in range(first, last + step, step)), ''
+    if is_null_raw(formula, values[0]):
+        return '-', unit
     value = formula(Decimal(values[0])) if formula else Decimal(values[0])
     if not value.is_finite():
         raise ValueError('Ergebnis ist nicht endlich')
@@ -332,7 +395,8 @@ async def read_list(args):
     Modbus 0x03 and 0x04 must be queried separately. Small gaps may be
     included in a block, but unrelated register regions are never swept.
     """
-    entries = load_registers(Path(args.file))
+    layout_entries = load_registers(Path(args.file))
+    entries = [entry for entry in layout_entries if entry[0]]
     address = resolve_device(args)
     max_words = getattr(args, 'block_size', 16)
     max_gap = getattr(args, 'max_gap', 2)
@@ -483,6 +547,29 @@ async def read_list(args):
         except (ValueError, InvalidOperation, ZeroDivisionError, UnicodeError) as exc:
             results.append((reg_label, label, '—', unit, f'Umrechnung: {exc}'))
 
+    def format_separate_values(regs, formula, typ):
+        """Format explicit comma-separated measurements independently."""
+        kind = 4 if typ == 'I' else 3
+        formatted = []
+        for number in regs:
+            raw = values.get((kind, number))
+            if raw is None:
+                formatted.append('?')
+            elif is_null_raw(formula, raw):
+                formatted.append('-')
+            else:
+                try:
+                    converted = formula(Decimal(raw)) if callable(formula) else Decimal(raw)
+                    if not converted.is_finite():
+                        raise ValueError('Ergebnis ist nicht endlich')
+                    dec = format(converted, 'f')
+                    if '.' in dec:
+                        dec = dec.rstrip('0').rstrip('.')
+                    formatted.append(dec)
+                except (ValueError, InvalidOperation, ZeroDivisionError):
+                    formatted.append('?')
+        return ', '.join(formatted)
+
     # Register ranges: one row of decimal values and one aligned row of hex
     # bytes. A fixed six-character cell keeps the two representations aligned.
     # Single registers and ASCII/TIME/BITS keep the existing compact output.
@@ -493,17 +580,54 @@ async def read_list(args):
     # the raw column from registers.txt (which can contain enum legends).
     # Align compact single-register rows without widening the whole table
     # to the length of multi-register scans.
-    value_width = max((len(result[2]) for entry, result in zip(entries, results)
-                       if len(entry[0]) == 1), default=5)
+    # Width must also include explicit comma lists. Their formatted text can
+    # exceed a single value, but contiguous register dumps must not stretch
+    # the compact table columns.
+    compact_widths = []
+    for entry, result in zip(entries, results):
+        regs, _label, formula, _unit, typ = entry
+        is_contiguous = (len(regs) > 1 and
+                         regs == tuple(range(regs[0], regs[-1] + 1)))
+        if len(regs) == 1:
+            compact_widths.append(len(result[2]))
+        elif (not is_contiguous or getattr(formula, 'nohex', False)) and formula != 'HEX':
+            compact_widths.append(len(format_separate_values(regs, formula, typ)))
+    value_width = max([5, *compact_widths])
     unit_width = max((len(result[3]) for entry, result in zip(entries, results)
-                      if len(entry[0]) == 1), default=4)
+                      if len(entry[0]) == 1 or getattr(entry[2], 'nohex', False)), default=4)
     print(f'{"Reg":>{reg_width}}  {"Bezeichnung":<{label_width}}  '
           f'{"Wert":>{value_width}}  {"Einheit":<{unit_width}}  Status')
     print('-' * min(120, prefix_width + 90))
-    for (regs, label, formula, unit, typ), (reg, _label, value, shown_unit, status) in zip(entries, results):
+    result_iter = iter(results)
+    table_width = min(120, prefix_width + 90)
+    for regs, label, formula, unit, typ in layout_entries:
+        if not regs:
+            directive_kind, directive_value = label
+            if directive_kind == 'blank':
+                print()
+            elif directive_kind in ('line', 'double'):
+                print(('-' if directive_kind == 'line' else '=') *
+                      (directive_value if directive_value is not None else table_width))
+            elif directive_kind == 'section':
+                print(f'[{directive_value}]')
+            else:
+                print(directive_value)
+            continue
+        reg, _label, value, shown_unit, status = next(result_iter)
         kind = 4 if typ == 'I' else 3
         prefix = f'{reg:>{reg_width}}  {label:<{label_width}}  '
-        if len(regs) > 1 and formula not in ('ASCII', 'TIME'):
+        # Explicit comma lists (e.g. 30, 42) are separate measurements,
+        # not a contiguous raw-register dump. Show each converted value,
+        # without an unsolicited hexadecimal line. HEX remains explicit.
+        is_contiguous = (len(regs) > 1 and
+                         regs == tuple(range(regs[0], regs[-1] + 1)))
+        if len(regs) > 1 and (not is_contiguous or getattr(formula, 'nohex', False)) and formula != 'HEX':
+            # Use the same column widths as single-register rows.
+            formatted = format_separate_values(regs, formula, typ)
+            print(prefix + f'{formatted:>{value_width}}  '
+                  f'{shown_unit:<{unit_width}}  [{status}]')
+        elif len(regs) > 1 and formula not in ('ASCII', 'TIME'):
+
             # Each cell is 5 chars wide, followed by one separator space.
             # HEX: high byte then low byte, e.g. decimal 536 -> 02 18.
             raw_words = [values.get((kind, number)) for number in regs]
@@ -513,6 +637,10 @@ async def read_list(args):
                 if raw is None:
                     decimal_cells.append(f'{"?":>5}')
                     hex_cells.append('?? ??')
+                    continue
+                if is_null_raw(formula, raw):
+                    decimal_cells.append(f'{"-":>5}')
+                    hex_cells.append(f'{raw >> 8:02X} {raw & 0xFF:02X}')
                     continue
                 try:
                     converted = formula(Decimal(raw)) if callable(formula) else Decimal(raw)
@@ -741,7 +869,7 @@ async def read_config_parameter(address):
 
 
 async def interactive_menu():
-    print('\nNOAH BLE REGISTER TOOL v0.6.5 (experimentell)')
+    print('\nNOAH BLE REGISTER TOOL v0.6.11 (experimentell)')
     while True:
         selected = await select_live_device(8)
         if selected is None:
