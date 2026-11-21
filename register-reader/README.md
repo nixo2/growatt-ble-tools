@@ -1,298 +1,208 @@
-# Growatt NOAH BLE Register Reader
+# NOAH BLE TUI — Version 0.8.0
 
-**Experimental register diagnostic and exploration tool — v0.6.11**
+**Interaktiver Registerleser und experimentelles Konfigurationswerkzeug für Growatt NOAH über Bluetooth Low Energy (BLE).**
 
-Read and explore Growatt NOAH registers locally over Bluetooth Low Energy (BLE), without depending on Growatt cloud access. This utility complements the [NOAH BLE Watchdog](../README.md).
+Die TUI baut auf `noah_registers.py`, `growatt_ble.py` und `protocol.py` auf. Sie ermöglicht das lokale Auslesen und — nach ausdrücklicher Bestätigung — Schreiben ausgewählter Gerätedaten, ohne die Growatt-App für diese Vorgänge zu benötigen. Das Projekt ist **inoffiziell** und steht in keiner Verbindung zu Growatt.
 
-> **Experimental / use at your own risk.** Register addresses and meanings may vary between devices and firmware versions. Reading is intended to be non-destructive, but manual **holding-register writes** and **datalogger restarts** can change device behavior or interrupt connectivity. Use only on equipment you own or are authorized to manage. This is an unofficial project, not affiliated with Growatt.
+> **Wichtiger Sicherheitshinweis:** Schreibzugriffe und der Datenlogger-Neustart sind experimentell. Falsche Werte können Zeitpläne, Leistungsgrenzen, Netzwerkverbindungen oder andere Gerätefunktionen verändern. Nur an eigenen bzw. autorisiert verwalteten Geräten verwenden. Vor Änderungen bisherige Werte dokumentieren. Nicht alle lesbaren Register sind tatsächlich beschreibbar; ihre Bedeutung kann je nach Firmware abweichen.
 
-## Version history (through v0.6.11)
+## Funktionen
 
-The register reader has received several improvements since v0.5.7:
+### Registerübersicht und Diagnose
 
-- **v0.5.8:** Binary bit-field formatting (`bit9-0`, `bit3-0`) with the least-significant bit on the right; units such as `Uhr` are preserved for `TIME` values.
-- **v0.5.9:** Numeric register ranges are supported, not just ASCII ranges; `HEX` formatting was added.
-- **v0.6.0:** Failed block reads can fall back to smaller ranges and preserve readable values when some registers fail.
-- **v0.6.1:** Register ranges are displayed as aligned **decimal and hexadecimal rows**, rather than one very long combined value.
-- **v0.6.2:** **Adaptive fallback** probes the first and last register of a failed block. If both fail, the remaining registers are queried individually; otherwise the block is split. A range with zero successful values is marked `NICHT LESBAR`, not `TEILWEISE`.
-- **v0.6.3:** New `start->count` register syntax, e.g. `100->16` is equivalent to `100-115`.
-- **v0.6.4–v0.6.5:** Aligned table columns and fixed output of enumeration labels; corrected a crash when a list contains only multi-register ranges.
-- **v0.6.6:** Layout directives in `registers.txt`: headings, section labels, separator lines and blank lines.
-- **v0.6.7:** Comma-separated, noncontiguous register lists are displayed as individually converted values in one row, without an automatic hex row.
-- **v0.6.8:** Optional `NULL0`, `NULL65535` and `NULL0,65535` raw-value sentinels, rendered as `-` before conversion.
-- **v0.6.9:** Corrected alignment of multi-value rows with other table columns.
-- **v0.6.10:** Bit-field direction follows the requested order: `bit9-0` (bit 0 right) or `bit0-9` (bit 0 left), within a 16-bit register.
-- **v0.6.11:** Optional `NOHEX` modifier suppresses the secondary hexadecimal row for numeric ranges.
+- Zweispaltige, interaktive Terminalansicht mit unabhängiger Auswahl in beiden Spalten.
+- Darstellung der in `registers.txt` definierten **Input- (`I`), Holding- (`H`) und Konfigurationsparameter (`C`)**.
+- Auswahl per Pfeiltasten; **Enter** öffnet Registerdetails mit Adresse, Typ und Interpretation.
+- Unterstützung für Einzelregister, Registerbereiche und nicht zusammenhängende Registerlisten.
+- Darstellung von Zahlenwerten, Faktoren/Umrechnungen, Einheiten, Enumerationen, Bitfeldern, ASCII-Text und Zeitwerten entsprechend der Registerdefinition.
+- Fortschritt und Diagnose der vollständigen BLE-Abfrage werden vor dem Öffnen der Übersicht in der Konsole angezeigt.
+- **R** liest bei Bedarf die gesamte Registerliste erneut ein.
 
-These changes primarily improve register-list parsing, diagnostic reads and display. The existing manual write/restart functions remain available.
+### Kontrollierter Schreibzugriff
 
-## Features
+- **W** öffnet den Schreibdialog **innerhalb des Registerdetailfensters**; die Hauptübersicht selbst bietet keinen direkten Schreibbefehl.
+- **C-Parameter:** Schreiben einzelner ASCII-Konfigurationswerte über den Growatt-BLE-Konfigurationsbefehl `0x18`; anschließendes Kontrolllesen über `0x19`. Beispielsweise wurden MQTT-Server (Parameter 17) und MQTT-Port (Parameter 18) praktisch getestet.
+- **H-Register:** Schreiben einzelner 16-Bit-Holding-Register über Growatt-BLE-Passthrough `0x17` mit Modbus-Funktion `0x06` (FC06).
+- **Registergruppen:** Bei Einträgen wie `45–50` wird zuerst **die konkrete Registeradresse** und danach der **neue Rohwert** eingegeben. Es wird ausschließlich dieses einzelne Register geschrieben, nicht die ganze Gruppe.
+- Dezimale Rohwerte und `0x`-Hexwerte; für einzelne mit `TIME` definierte H-Register Eingabe als `HH:MM`.
+- Vor dem Schreiben: Eingabeprüfung, erneutes Lesen des alten Werts und ausdrückliche Bestätigung **„JA, schreiben“**.
+- Nach dem Schreiben: Kontrolllesen des tatsächlich übernommenen Werts. Die Anzeige verwendet den **Rücklesewert**, nicht ungeprüft die Eingabe.
+- **Gezielte Tabellenaktualisierung:** Nur der betroffene Tabelleneintrag wird aktualisiert. Bei kombinierten H-Registern werden die weiteren Gruppenmitglieder nachgelesen; die gesamte Liste muss nicht neu abgefragt werden.
+- Die Spaltenformatierung bleibt auch nach Einzelaktualisierungen erhalten.
 
-- Discover nearby NOAH devices over BLE and select a device interactively.
-- Read **input registers** (Modbus function `0x04`) and **holding registers** (`0x03`) through Growatt BLE passthrough function `0x17`.
-- Read a user-defined `registers.txt` list, including individual registers, ranges and overlapping ranges.
-- Decode decimal/scaled values, hexadecimal bytes, ASCII text, time values, enumerations and direction-aware bit fields.
-- Use optional raw-value sentinels (`NULL0`, etc.) and `NOHEX` output modifiers.
-- Organize the results table using headings, separators and blank lines from `registers.txt`.
-- Preserve successful register values even when neighboring registers are unreadable.
-- Manually read an individual register; optionally write a holding register (Modbus `0x06`) after explicit confirmation.
-- Request a datalogger restart and query Growatt configuration parameters via BLE.
+**Hinweis zu C-Parametern:** Auch lesbare Statusparameter (z. B. 55/60) können in der experimentellen Oberfläche zur Bearbeitung angeboten werden. Daraus folgt **nicht**, dass sie beschreibbar sind oder ein Schreibversuch sinnvoll ist.
+
+**Hinweis zu H-Registern:** Alle in `registers.txt` als `H` aufgeführten Register sind grundsätzlich im Schreibdialog erreichbar, auch unbekannte. Die TUI kennt nicht für jedes Register zulässige Wertebereiche oder Nebenwirkungen. Bei Gruppen mit ASCII-Anzeige werden **16-Bit-Rohwerte**, keine vollständigen ASCII-Zeichenfolgen geschrieben.
+
+### Datenlogger-Neustart
+
+- **N** öffnet den Neustartdialog.
+- Ein Neustartbefehl wird erst nach ausdrücklicher Bestätigung gesendet.
+- Der Befehl kann die BLE- bzw. MQTT-Verbindung vorübergehend unterbrechen.
+
+### Verwaltung mehrerer NOAHs
+
+- Beim ersten Start **ohne `noah_devices.txt`** öffnet sich die Geräteverwaltung.
+- BLE-Suche nach erreichbaren NOAH-Geräten; gefundene Geräte können der gespeicherten Liste hinzugefügt oder daraus entfernt werden.
+- Bei späteren Starts öffnet sich zunächst die Auswahl der gespeicherten Geräte.
+- **G**: anderes gespeichertes Gerät auswählen; **K**: Geräteverwaltung öffnen — auch aus den Registerdetails heraus.
+- Die Geräte werden in der Datei `noah_devices.txt` gespeichert (UTF-8-Text mit JSON-Struktur).
+- **`--address`** erlaubt die direkte Auswahl einer BLE-Adresse ohne Gerätemenü.
+
+## Voraussetzungen
+
+- Python 3.11 oder neuer empfohlen.
+- Funktionierender Bluetooth-Low-Energy-Adapter und Zugriff auf das betreffende NOAH-Gerät.
+- Terminal mit ausreichender Breite für die zweispaltige Darstellung; unter Windows wird Windows Terminal empfohlen.
+- Unter Linux muss der BLE-Adapter über BlueZ erreichbar sein. Unter Windows verwendet Bleak die Windows-Bluetooth-Schnittstelle. BLE-Adressen/Identifikatoren können zwischen Betriebssystemen abweichen; Geräte gegebenenfalls erneut suchen.
 
 ## Installation
 
-The script uses the existing `protocol.py` and `growatt_ble.py` from the watchdog project. Suggested repository structure:
+Die TUI benötigt die folgenden Projektdateien **im selben Verzeichnis**:
 
 ```text
-growatt-noah-ble-watchdog/
-├── protocol.py
+noah-ble/
+├── noah_tui.py
+├── noah_registers.py
 ├── growatt_ble.py
+├── protocol.py
+├── registers.txt
 ├── requirements.txt
-├── README.md
-└── register-reader/
-    ├── README.md
-    ├── noah_registers.py
-    └── registers.txt
+└── noah_devices.txt      # wird bei Bedarf angelegt
 ```
 
-Install the repository's Python requirements and use a working BLE adapter. If the reader is in `register-reader/`, Python must be able to import modules from the repository root:
+Die zuletzt getestete Entwicklungsdatei `noah_tui_v0_8_2.py` wird für die Veröffentlichung als **`noah_tui.py`** bereitgestellt. Die Versionsnummer **0.8.0** bezeichnet den öffentlichen Release-Stand; die interne Entwicklungsnummer muss für das Release gegebenenfalls noch angepasst werden.
 
-**Linux / Raspberry Pi:**
+Empfohlene `requirements.txt` (bestehende Mindestversionen beibehalten):
+
+```text
+bleak>=0.21
+cryptography>=42
+windows-curses; sys_platform == "win32"
+textual
+rich
+```
+
+`windows-curses` bleibt für gegebenenfalls vorhandene ältere curses-basierte Projektteile erhalten; die TUI selbst verwendet **Textual** und **Rich**.
+
+### Linux
 
 ```bash
+cd ~/growatt-ble
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
-PYTHONPATH=. python3 register-reader/noah_registers.py
+python -m pip install -r requirements.txt
+python noah_tui.py
 ```
 
-**Windows PowerShell:**
+### Windows (PowerShell)
 
 ```powershell
-py -m pip install -r requirements.txt
-$env:PYTHONPATH = (Get-Location).Path
-py .\register-reader\noah_registers.py
+cd C:\NOAH-BLE
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python noah_tui.py
 ```
 
-If you keep `noah_registers.py`, `protocol.py` and `growatt_ble.py` in the **same directory**, you can run the script directly without setting `PYTHONPATH`. By default, `registers.txt` must be beside `noah_registers.py`.
+Falls PowerShell die Aktivierung der virtuellen Umgebung verhindert, kann Python direkt aufgerufen werden:
 
-## Interactive menu
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe noah_tui.py
+```
 
-Start without arguments:
+## Bedienung
+
+| Taste | In der Registerübersicht | In den Registerdetails |
+|---|---|---|
+| `↑` / `↓` | Register auswählen | — |
+| `←` / `→` | Spalte wechseln | — |
+| `Enter` | Details und Ändern öffnen | — |
+| `W` | — | Schreibdialog für `H` bzw. geeignete `C`-Parameter |
+| `G` | Gerät auswählen | Gerät auswählen |
+| `K` | Geräte verwalten | Geräte verwalten |
+| `N` | Datenlogger-Neustart mit Sicherheitsabfrage | — |
+| `R` | Alle Register neu lesen | — |
+| `Q` | Programm beenden | Detailfenster schließen |
+| `Esc` | — | Detailfenster schließen |
+
+**Typischer Schreibablauf:** Register markieren → `Enter` → `W` → Wert eingeben → **Prüfen** → angezeigte alte/neue Rohwerte kontrollieren → **JA, schreiben** → Rückleseergebnis abwarten → zur Übersicht zurückkehren. Die betreffende Tabellenzeile wird automatisch aktualisiert.
+
+### Beispiel: Einzelregister
+
+Bei Holding-Register `251` (Entladegrenze) kann ein zulässiger Rohwert eingegeben und nach der Sicherheitsabfrage zurückgelesen werden. Änderungen an Lade- oder Entladegrenzen wirken sich auf das Geräteverhalten aus.
+
+### Beispiel: Registergruppe 45–50
+
+Die Gruppe wird anhand bisheriger Messungen **vermutlich** als Gerätezeit interpretiert (Jahr, Monat, Tag, Stunde, Minute, Sekunde). Diese Zuordnung ist nicht offiziell bestätigt.
+
+Um nur das mutmaßliche Tagesregister zu bearbeiten, im Schreibdialog **Registeradresse `47`** auswählen und darunter den gewünschten **16-Bit-Rohwert** eingeben. Andere Gruppenregister werden nicht geschrieben. Ein falscher Wert kann die interne Zeit oder zeitabhängige Funktionen beeinflussen.
+
+## Gerätedatei `noah_devices.txt`
+
+Die Geräteverwaltung erzeugt eine Textdatei mit JSON-Inhalt, beispielsweise:
+
+```json
+[
+  {"address": "AA:BB:CC:DD:EE:01", "name": "NOAH Terrasse"},
+  {"address": "AA:BB:CC:DD:EE:02", "name": "NOAH Garage"}
+]
+```
+
+Die Adressen sind **Platzhalter**. Die Datei kann bei Bedarf manuell bearbeitet werden; gültige JSON-Syntax ist erforderlich. Die TUI speichert Änderungen über die Geräteverwaltung.
+
+## Eigene Registerdefinitionen
+
+Die Datei `registers.txt` bestimmt, welche Register gelesen und angezeigt werden. Sie unterstützt Registertypen `I`, `H` und `C`, einzelne Adressen, Bereiche, Registerlisten sowie Formatierungsangaben und Abschnittsüberschriften. Die TUI übernimmt die Interpretation aus dem vorhandenen Registerleser `noah_registers.py`.
+
+Nicht dokumentierte Register sollten vor dem Schreiben zunächst über längere Zeit beobachtet und mit bekannten Betriebszuständen verglichen werden.
+
+## Kommandozeilenoptionen
 
 ```bash
-PYTHONPATH=. python3 register-reader/noah_registers.py
+python noah_tui.py
+python noah_tui.py --address AA:BB:CC:DD:EE:FF
+python noah_tui.py --file /pfad/zu/registers.txt
 ```
 
-The interface currently uses German prompts:
+Die Adresse bei `--address` muss zum jeweiligen Betriebssystem und BLE-Backend passen.
 
-```text
-1) Register aus registers.txt auslesen
-2) Register manuell lesen / schreiben
-3) Datenlogger über BLE neu starten
-4) Konfigurationsparameter lesen (Growatt 0x19)
-g) Anderes Gerät auswählen
-q) Beenden
-```
+## Technischer Hintergrund
 
-## `registers.txt` format
+- **BLE:** Kommunikation über `bleak` und die vorhandenen Projektmodule `growatt_ble.py` / `protocol.py`.
+- **Registerlesen:** Modbus-Funktionen `0x03` (Holding) und `0x04` (Input) im Growatt-BLE-Passthrough `0x17`.
+- **Holding-Schreiben:** Modbus `0x06` (ein Register) im Passthrough `0x17`.
+- **Konfigurationsparameter:** Growatt-Konfigurationsbefehle `0x18` (Schreiben) und `0x19` (Lesen).
+- **TUI:** `textual` / `rich`.
+- **Darstellung:** Wiederverwendung der Registerdefinitionen und Umrechnungen aus `noah_registers.py`.
 
-Each non-comment line has five pipe-separated columns:
+Das Lesen und Schreiben der MQTT-Konfiguration wurde an einem realen NOAH erprobt; nach Änderung der MQTT-Serveradresse wurden tatsächlich Daten am eigenen MQTT-/Node-RED-System empfangen. Daraus lässt sich **keine allgemeine Kompatibilitätsgarantie** für alle Firmwarestände oder alle Register ableiten.
 
-```text
-Register|Bezeichnung|Faktor|Einheit|Registertyp
-```
+## Neuerungen des 0.8.0-Releases
 
-- **Register:** single address, inclusive range, or `start->count` expression.
-- **Bezeichnung:** display label.
-- **Faktor:** conversion or output format.
-- **Einheit:** unit or enumerated value labels.
-- **Registertyp:** `I` (input) or `H` (holding); defaults to `I` if omitted.
+Gegenüber dem früheren reinen Registerleser bietet die interaktive Ausgabe insbesondere:
 
-Example:
+1. Vollbild-TUI mit zwei unabhängig navigierbaren Registerspalten.
+2. Registerdetailfenster mit integrierter Schreibfunktion (`Enter` → `W`).
+3. Bestätigtes ASCII-Schreiben von Growatt-Konfigurationsparametern.
+4. Experimentelles Schreiben aller definierten Holding-Register, einschließlich einzelner Mitglieder von Registergruppen.
+5. Vorab-Lesen, explizite Sicherheitsabfrage und Kontrolllesen nach Schreibzugriffen.
+6. Neustartfunktion für den Datenlogger mit Sicherheitsabfrage.
+7. Persistente Geräteverwaltung mit BLE-Suche, Geräteauswahl und Gerätewechsel.
+8. Gezielte Aktualisierung geänderter Tabellenzeilen ohne vollständige neue BLE-Abfrage.
+9. Korrigierte feste Spaltenformatierung bei der gezielten Aktualisierung.
+10. Manuelles vollständiges Neueinlesen (`R`) weiterhin jederzeit möglich.
 
-```text
-# Single registers and calculations
-12|Anzahl Akkupacks|1|Stück|I
-29|SOC Bat.1|1|%|I
-30,42,54,66|Temp. Bat.1-4|*0.1 -273.1 NULL0|°C|I
-92|PV1-Spannung|0.01|V|I
+## Grenzen und bekannte Risiken
 
-# ASCII across several 16-bit registers
-21-28|Seriennummer|ASCII||I
+- Keine Garantie, dass jedes in `registers.txt` definierte `H`- oder `C`-Register tatsächlich beschreibbar ist.
+- Keine vollständige Validierung gerätespezifischer Wertebereiche für unbekannte Holding-Register.
+- Schreibzugriffe auf Registergruppen betreffen immer nur **ein** 16-Bit-Register pro Vorgang.
+- Bei einer abgebrochenen BLE-Verbindung kann der tatsächliche Schreibzustand unklar sein; in diesem Fall vor erneutem Schreiben erst auslesen.
+- Eine erfolgreiche Lesekontrolle beweist nicht automatisch, dass eine Einstellung nach jedem Neustart dauerhaft erhalten bleibt.
+- Bluetooth-Erkennung und Berechtigungen unterscheiden sich zwischen Linux und Windows.
 
-# Bit fields: bit 0 is the rightmost character
-15|Zellen Fehler|bit0-9|Zellen 1-10|I
-14|Heizung|bit0-3|Akku 1-4|I
+## Lizenz
 
-# Enumerations
-8|Modus|1|0 Load First, 1 Battery First, 2 Smart Self-Use|I
-
-# Time values (unit is preserved)
-254|Slot1 Startzeit|TIME|Uhr|H
-255|Slot1 Endzeit|TIME|Uhr|H
-
-# Layout controls
-**[NOAH DATA]**
-**---40---**
-**LEER**
-
-# Multiple separate registers: one line, one conversion per register
-29,41,53,65|SOC Bat.1-4|1|%|I
-2,3,4|Fehler Intern, Netz, Output|1 NOHEX||I
-
-# Exploratory reads
-100->16|Suche|1||I
-116->16|Suche|HEX||I
-```
-
-### Register-address syntax
-
-| Expression | Meaning |
-| --- | --- |
-| `100` | One register: 100 |
-| `100-115` | Inclusive range: 100 through 115 |
-| `100->16` | Start at 100, read **16** registers (100–115) |
-| `100,105,110` | Three specified registers |
-| `100->16,200->8` | Two ranges in one definition |
-
-The parser rejects duplicate addresses **within a single definition**, invalid counts such as `100->0`, and ranges beyond register `65535`. Overlapping ranges in **different lines** are allowed; the reader collects distinct addresses for acquisition and renders each requested row separately.
-
-**Note:** A range in `registers.txt` describes the desired output, not necessarily one BLE request. Acquisition is divided into blocks according to `--block-size` and `--max-gap`.
-
-### Formatting and conversion
-
-| `Faktor` | Behavior |
-| --- | --- |
-| `1`, `0.01` | Multiply raw register value by the specified factor |
-| `*0.1 -273.1` | Arithmetic expression applied to the raw value |
-| `ASCII` | Interpret register bytes as ASCII text |
-| `HEX` | Show bytes in hexadecimal, high byte first |
-| `TIME` | Decode one register as `HH:MM` (high byte = hour, low byte = minute) |
-| `bit9-0`, `bit3-0` | Show bits in descending order (bit 0 on the right) |
-| `bit0-9`, `bit0-3`, `bit0-7` | Show bits in ascending order (bit 0 on the left) |
-| `*0.1 -273.1 NULL0` | Treat a raw zero as unavailable (`-`), otherwise apply the formula |
-| `1 NULL65535` / `1 NULL0,65535` | Treat specified raw values as unavailable |
-| `1 NOHEX` | Suppress the extra hex row for numeric multi-register output |
-| `*0.1 -273.1 NULL0 NOHEX` | Combine sentinel handling and output suppression |
-
-Bit masks operate on a **single 16-bit register**, with bit numbers 0–15; the number of displayed bits is determined by the endpoints. For raw value `5`, `bit3-0` displays `0101` and `bit0-3` displays `1010`. `TIME` also requires a single register. Raw value `536` (`0x0218`) appears as bytes `02 18` in a hex dump.
-
-`NULL...` is checked against each **raw register value before scaling**, not against the converted result. `-` means a deliberately suppressed sentinel value, whereas `?` means the register could not be read. Use `NULL0` only where zero is truly an unavailable-value marker: a battery SOC of 0% is a legitimate reading. The modifiers apply per value in comma-separated lists too. `NOHEX` is optional and leaves existing definitions unchanged.
-
-The reader also recognizes enum labels in the unit column, such as `0 Aus, 1 Ein`. An alternative six-column bit-mask notation is accepted for compatibility, e.g. `14|Heizung|1|bit3-0|Akku4-1|I`; the five-column form above is recommended.
-
-### Table layout directives
-
-Standalone lines wrapped in `**` control **display only** and do not trigger BLE requests:
-
-| Directive | Effect |
-| --- | --- |
-| `**NOAH DATA**` | Heading |
-| `**[BATTERY]**` | Section label (shown as `[BATTERY]`) |
-| `**---**` | Separator across the calculated table width |
-| `**---40---**` | Separator of 40 hyphens |
-| `**===40===**` | Separator of 40 equals signs |
-| `**LEER**` | Blank line |
-
-Explicit separator widths must be 1–200. Display directives preserve their positions in the source file while BLE requests are still grouped independently for efficiency.
-
-## Register-range display
-
-For **contiguous numeric register ranges** (`100-115`, `100->16`, or a contiguous comma list such as `2,3,4`), the default output uses **two aligned rows**: decimal (or scaled) values above, hexadecimal bytes below. Each decimal/hex pair refers to the same register position. Add `NOHEX` to the factor field to show only the converted values in one row.
-
-**Noncontiguous comma lists** (e.g. `30,42,54,66`) are displayed as individually converted, comma-separated values in a single aligned row without an automatic hex row. Explicit `HEX` output remains available. This distinction matters: `2,3,4` is contiguous and therefore needs `NOHEX` to suppress its hex row.
-
-Example (illustrative values):
-
-```text
-Reg       Bezeichnung  Werte / Status
-90-93     Suche          100    10   536    13
-                         00 64 00 0A 02 18 00 0D  [OK]
-```
-
-Each hexadecimal register consists of **two bytes**, high byte first. Missing values are shown as `?` in the decimal row and `?? ??` in the hex row. Results are classified as:
-
-- `OK`: every requested register was read.
-- `TEILWEISE (n/N Register)`: at least one, but not all, registers were read.
-- `NICHT LESBAR (0/N Register)`: none of the requested registers could be read.
-
-The placeholders remain visible even for entirely unreadable ranges. **Very wide ranges may still wrap in narrow terminals**; consider shorter rows (e.g. `100->8`) or a wider terminal window.
-
-## Block reads and adaptive fallback
-
-The reader first groups requested addresses into blocks, separately for input and holding registers. Defaults:
-
-- `--block-size 16`: at most 16 registers per initial block (allowed: 1–32).
-- `--max-gap 2`: bridge up to two unrequested registers between nearby requested addresses (allowed: 0–8).
-
-When a block cannot be decoded, the current reader:
-
-1. Queries the **first** and **last** register individually.
-2. If **both** are unreadable, queries the remaining registers individually.
-3. If **at least one** is readable, splits the block and tries smaller blocks recursively.
-4. Reuses cached individual probe results rather than repeating those probes.
-
-This strategy can reduce requests in fully unreadable regions. For a completely unreadable 16-register block, it requires **17 requests** (one initial block request plus 16 individual reads), instead of 31 with full recursive splitting. It does **not** guarantee the fewest requests for every possible failure pattern.
-
-A failed block read does **not** necessarily mean the addresses do not exist: the device may reject a range, return a Modbus exception, time out, or use an as-yet-unrecognized reply format. The tool reports what it can decode; it does not prove register absence.
-
-## Command-line usage
-
-Run from the repository root with the root directory on `PYTHONPATH` if using the layout above:
-
-```bash
-PYTHONPATH=. python3 register-reader/noah_registers.py scan
-PYTHONPATH=. python3 register-reader/noah_registers.py read --address <BLE_ADDRESS> --type input --register 92
-PYTHONPATH=. python3 register-reader/noah_registers.py read --address <BLE_ADDRESS> --type holding --register 255
-PYTHONPATH=. python3 register-reader/noah_registers.py list --address <BLE_ADDRESS>
-PYTHONPATH=. python3 register-reader/noah_registers.py list --address <BLE_ADDRESS> --file register-reader/registers.txt --block-size 8 --max-gap 0
-```
-
-Use `--verbose` to inspect raw BLE traffic when troubleshooting, and `--timeout` to adjust response waiting time. The `read` subcommand supports `--count` (1–32) for a direct block request. Run `--help`, `list --help`, or `read --help` for the complete options.
-
-**Privacy:** Raw traffic, configuration parameters and diagnostic logs may include serial numbers, BLE addresses, network credentials, server addresses or private URLs. Redact them before sharing.
-
-## Manual writes and configuration queries
-
-These are separate operations from reading `registers.txt`:
-
-| Operation | Protocol | Notes |
-| --- | --- | --- |
-| Input/holding register read | Growatt BLE `0x17`, inner Modbus `0x04`/`0x03` | Diagnostic read |
-| Holding register write | Growatt BLE `0x17`, inner Modbus `0x06` | Experimental; explicit `JA` confirmation and read-back attempt |
-| Configuration parameter query | Growatt BLE `0x19` | Read-only; may reveal sensitive values |
-| Datalogger restart | Growatt BLE `0x18`, parameter `0x20` | Explicit confirmation; reboot not guaranteed by GATT ACK |
-
-Configuration parameter IDs are **not** Modbus register addresses. For example, parameter `80` has returned a firmware-update URL on a tested device; that does **not** prove the linked firmware was installed or downloaded.
-
-### Observed time-related configuration parameters (read-only)
-
-Recent BLE `0x19` queries on a tested NOAH returned:
-
-| Config ID | Observed raw ASCII value | Interpretation / status |
-| --- | --- | --- |
-| `30` (`0x001E`) | `GMT+8` | Time-zone string; exact device semantics and DST behavior are not yet verified |
-| `31` (`0x001F`) | `2026-11-20 18:05:18` | Device date/time string, format `YYYY-MM-DD HH:MM:SS` |
-
-These are **observations from one device**, not a verified write specification. **v0.6.11 can query these parameters but cannot edit them.** Although BLE `0x18` is used for some configuration operations (including the experimental datalogger restart), the payload format and device behavior for writing parameter IDs 30 and 31 have **not** been established. Do not assume that a `0x19` query can simply be reversed into a safe write. Time-zone handling, UTC versus local clock semantics, and daylight-saving changes remain open research questions. The reader permits queries of all parameter IDs, including potentially sensitive ones; take care when sharing output.
-
-The datalogger restart and configuration-parameter query are available from the **interactive menu**, not separate CLI subcommands.
-
-## Troubleshooting
-
-- **`ModuleNotFoundError: protocol` / `growatt_ble`:** Place the files together or set `PYTHONPATH` to the repository root.
-- **`registers.txt` missing:** Keep it next to `noah_registers.py` or supply `list --file ...`.
-- **No device found:** Check BLE adapter availability, permissions, distance and device advertising.
-- **`Antwortformat nicht sicher dekodierbar`:** A BLE response was received, but its embedded Modbus reply could not be validated. Try a single register and `--verbose`; this is not proof that the address is unused.
-- **Many slow failures:** Reduce the search range, try `--block-size 8` or `--max-gap 0`, and avoid very large speculative scans. Individual requests may still be slow.
-- **`NICHT LESBAR (0/N Register)`:** All requested values in that row were unavailable; placeholders are intentional.
-- **Unexpected line wraps:** Widen the terminal or define shorter display ranges.
-- **Restart or write uncertainty:** A successful GATT write is not proof that a device-level operation completed. Verify device state independently.
-
-## Credits and licensing
-
-The BLE protocol implementation builds on **Peter Meiser's** [growatt_noah_ble](https://github.com/meiser79/growatt_noah_ble), licensed under **Apache License 2.0**. Preserve the repository's `LICENSE`, `NOTICE` and upstream attribution when redistributing derived files.
-
-The unofficial [NEXA protocol notes by longsleep](https://gist.github.com/longsleep/cf5bc2eff0def99ad411b22abf7c2b33) provided research context; NEXA behavior should not be assumed to apply identically to every NOAH firmware.
-
-Developed and maintained by **nixo2**, with development assistance from **OpenAI's ChatGPT**. Contributions and reproducible findings are welcome; please remove personal identifiers and credentials from logs before publishing them.
+Es gelten die Lizenz- und Hinweisdateien (`LICENSE`, `NOTICE`) des jeweiligen Projekt-Repositories. Vor der Veröffentlichung bitte prüfen, dass diese Dateien zusammen mit den übernommenen Projektmodulen ausgeliefert werden.

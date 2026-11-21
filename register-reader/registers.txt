@@ -5,7 +5,7 @@ Register|Bezeichnung|Faktor|Einheit|Registertyp
 **---**
 21-28|Seriennummer|ASCII||I
 12|Stapel|1|Stück|I
-15|Zellen Fehler|bit0-9|Zellen 1-10|I
+15|Zellen Fehler|bit0-8|Zellen 1-9|I
 2,3,4|Fehler Intern, Netz, Output|1 NOHEX||I
 13|SOC Total|1|%|I
 29,41,53,65|SOC Bat.1-4|1|%|I
@@ -23,8 +23,7 @@ Register|Bezeichnung|Faktor|Einheit|Registertyp
 8|Modus|1|0 Load First, 1 Battery First, 2 Smart Self-Use|I
 10|Akku-Status|1|0 Idle, 1 Laden, 2 Entladen|I
 11|Ladeleistung|*1 -30000|W|I
-**LEER**
-**---**
+**SEITENUMBRUCH**
 **Noah Einstellungen**
 **---**
 250|Ladegrenze|1|%|H
@@ -37,8 +36,24 @@ Register|Bezeichnung|Faktor|Einheit|Registertyp
 258|Slot1 Aktiviert|1|0 Aus, 1 Ein|H
 **LEER**
 **---**
-300|Unbekannt|1||H
+**Datalogger**
+**---**
+17|MQTT-Server|ASCII||C
+18|MQTT-Port|ASCII||C
+55|Verbindung Router|ASCII|0 OK|C
+60|Verbindung Server|ASCII|16 OK|C
+**LEER**
+**---**
+**[UNBEKANNTE HOLDING-REGISTER]**
+
+45,46,47,48,49,50|Gerätezeit?|1 NOHEX||H
+56-58|Kennung? ASCII|ASCII||H
+62-70|Kennung/Zeitstempel? ASCII|ASCII||H
+300|Status?|bit15-0||H
 43|Unbekannt|1||H
-45-50|Unbekannt|1||H
-56-58|Unbekannt|1||H
-62-70|Unbekannt|1||H
+
+#300|Unbekannt|1||H#
+#43|Unbekannt|1||H#
+#45-50|Unbekannt|1||H#
+#56-58|Unbekannt|1||H#
+#62-70|Unbekannt|1||H#
