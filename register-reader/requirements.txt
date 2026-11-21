@@ -1,0 +1,5 @@
+bleak>=0.21
+cryptography>=42
+windows-curses; sys_platform == "win32"
+textual
+rich
