@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Experimental Growatt NOAH BLE register diagnostic (v0.6.11).
+"""Experimental Growatt NOAH BLE register diagnostic (v0.6.15).
 
 Requires the unmodified protocol.py and growatt_ble.py from the watchdog project.
 Based on the unofficial NEXA/NOAH protocol specification, section 8.10.
@@ -184,7 +184,7 @@ def parse_enum(text):
         if not match:
             return None
         result[int(match.group(1))] = match.group(2).strip()
-    return result if len(result) >= 2 else None
+    return result if result else None
 
 
 def parse_layout_directive(line):
@@ -194,6 +194,8 @@ def parse_layout_directive(line):
     body = line[2:-2].strip()
     if not body:
         raise ValueError('leerer Formatierungsbefehl')
+    if body.upper() in ('SPALTE', 'SEITENUMBRUCH'):
+        return ('page', '')
     if body.upper() == 'LEER':
         return ('blank', '')
     match = re.fullmatch(r'---(\d+)---', body)
@@ -241,8 +243,8 @@ def load_registers(path):
             raise ValueError(f'{path.name}:{lineno}: erwartet Register|Bezeichnung|Faktor|Einheit[|Registertyp]')
         reg_text, label, factor_text, unit = cols[:4]
         register_type = (cols[4] if len(cols) == 5 else 'I').strip().upper() or 'I'
-        if register_type not in ('I', 'H'):
-            raise ValueError(f'{path.name}:{lineno}: Registertyp muss I oder H sein')
+        if register_type not in ('I', 'H', 'C'):
+            raise ValueError(f'{path.name}:{lineno}: Registertyp muss I, H oder C sein')
         try:
             expanded = []
             for item in reg_text.split(','):
@@ -404,7 +406,9 @@ async def read_list(args):
         raise ValueError('block-size muss 1..32 und max-gap 0..8 sein')
     wanted = {kind: set() for kind in (3, 4)}
     for regs, _, _, _, typ in entries:
-        wanted[4 if typ == 'I' else 3].update(regs)
+        
+        if typ != 'C':
+            wanted[4 if typ == 'I' else 3].update(regs)
 
     blocks = []
     for kind in (4, 3):
@@ -513,9 +517,68 @@ async def read_list(args):
         for block_number, (kind, start, count) in enumerate(blocks, 1):
             print(f'Block {block_number}/{len(blocks)} wird geprüft ...', flush=True)
             await fetch_range(kind, start, count)
+        # Datalogger configuration is a separate address space (Growatt 0x19).
+        # Query each parameter individually, using the same authenticated BLE session.
+        config_ids = list(dict.fromkeys(reg for regs, _, _, _, typ in entries
+                                        if typ == 'C' for reg in regs))
+        for param_id in config_ids:
+            transactions += 1
+            try:
+                reply = await receive_reply(noah, p.query_request([param_id]),
+                                            args.timeout, args.verbose,
+                                            expected_func=p.FUNC_QUERY)
+                status, config_data = p.parse_query_reply(reply)
+                if status != 0:
+                    raise ValueError(f'QUERY-Status {status}')
+                if param_id not in config_data:
+                    raise ValueError('Parameter fehlt in der Antwort')
+                values[('C', param_id)] = config_data[param_id]
+                print(f'  C {param_id}: OK', flush=True)
+            except Exception as exc:
+                errors[('C', param_id)] = str(exc)
+                print(f'  C {param_id}: NICHT LESBAR ({exc})', flush=True)
 
     results = []
     for regs, label, formula, unit, typ in entries:
+        if typ == 'C':
+            # Config parameters are variable-length byte strings, not 16-bit words.
+            # Never interpret them via Modbus register scaling.
+            missing = [reg for reg in regs if ('C', reg) not in values]
+            reg_label = (str(regs[0]) if len(regs) == 1 else ','.join(map(str, regs)))
+            if missing:
+                results.append((reg_label, label, '—', unit, 'NICHT LESBAR'))
+            else:
+                chunks = []
+                for reg in regs:
+                    raw = values[('C', reg)]
+                    if formula == 'ASCII':
+                        # Escape control bytes instead of dropping them silently.
+                        chunks.append(raw.decode('utf-8', errors='backslashreplace')
+                                      .encode('unicode_escape').decode('ascii'))
+                    elif formula == 'HEX':
+                        chunks.append(raw.hex(' ').upper())
+                    else:
+                        chunks.append(raw.decode('utf-8', errors='backslashreplace')
+                                      .encode('unicode_escape').decode('ascii'))
+                # Optional numeric status legends in the Einheit column, as for I/H.
+                # Example: 60|Verbindung Server|ASCII|0 Getrennt, 16 Verbunden|C
+                # The legend is presentation-only; unknown codes remain visible.
+                legend = parse_enum(unit)
+                if legend is not None and formula != 'HEX':
+                    interpreted = []
+                    for chunk in chunks:
+                        try:
+                            number = int(chunk.strip())
+                        except ValueError:
+                            interpreted.append(chunk)
+                        else:
+                            interpreted.append(f'{number} ({legend.get(number, "unbekannt")})')
+                    chunks = interpreted
+                    shown_unit = ''
+                else:
+                    shown_unit = unit
+                results.append((reg_label, label, ', '.join(chunks), shown_unit, 'OK'))
+            continue
         kind = 4 if typ == 'I' else 3
         missing = [reg for reg in regs if (kind, reg) not in values]
         reg_label = (f'{regs[0]}-{regs[-1]}' if len(regs) > 1 and regs == tuple(range(regs[0], regs[-1] + 1)) else ','.join(str(reg) for reg in regs))
@@ -588,30 +651,36 @@ async def read_list(args):
         regs, _label, formula, _unit, typ = entry
         is_contiguous = (len(regs) > 1 and
                          regs == tuple(range(regs[0], regs[-1] + 1)))
-        if len(regs) == 1:
+        if len(regs) == 1 or typ == 'C':
             compact_widths.append(len(result[2]))
         elif (not is_contiguous or getattr(formula, 'nohex', False)) and formula != 'HEX':
             compact_widths.append(len(format_separate_values(regs, formula, typ)))
     value_width = max([5, *compact_widths])
     unit_width = max((len(result[3]) for entry, result in zip(entries, results)
-                      if len(entry[0]) == 1 or getattr(entry[2], 'nohex', False)), default=4)
-    print(f'{"Reg":>{reg_width}}  {"Bezeichnung":<{label_width}}  '
-          f'{"Wert":>{value_width}}  {"Einheit":<{unit_width}}  Status')
-    print('-' * min(120, prefix_width + 90))
+                      if len(entry[0]) == 1 or entry[4] == 'C' or getattr(entry[2], 'nohex', False)), default=4)
+    header = (f'{"Reg":>{reg_width}}  {"Bezeichnung":<{label_width}}  '
+              f'{"Wert":>{value_width}}  {"Einheit":<{unit_width}}  Status')
+    pages = [[]]
+    def emit(line=''):
+        pages[-1].append(str(line))
+    emit(header)
+    emit('__RULE__')
     result_iter = iter(results)
-    table_width = min(120, prefix_width + 90)
     for regs, label, formula, unit, typ in layout_entries:
         if not regs:
             directive_kind, directive_value = label
-            if directive_kind == 'blank':
-                print()
+            if directive_kind == 'page':
+                pages.append([header, '__RULE__'])
+            elif directive_kind == 'blank':
+                emit()
             elif directive_kind in ('line', 'double'):
-                print(('-' if directive_kind == 'line' else '=') *
-                      (directive_value if directive_value is not None else table_width))
+                emit(('__RULE__' if directive_kind == 'line' else '__DOUBLE__')
+                     if directive_value is None else
+                     ('-' if directive_kind == 'line' else '=') * directive_value)
             elif directive_kind == 'section':
-                print(f'[{directive_value}]')
+                emit(f'[{directive_value}]')
             else:
-                print(directive_value)
+                emit(directive_value)
             continue
         reg, _label, value, shown_unit, status = next(result_iter)
         kind = 4 if typ == 'I' else 3
@@ -621,12 +690,12 @@ async def read_list(args):
         # without an unsolicited hexadecimal line. HEX remains explicit.
         is_contiguous = (len(regs) > 1 and
                          regs == tuple(range(regs[0], regs[-1] + 1)))
-        if len(regs) > 1 and (not is_contiguous or getattr(formula, 'nohex', False)) and formula != 'HEX':
+        if typ != 'C' and len(regs) > 1 and (not is_contiguous or getattr(formula, 'nohex', False)) and formula != 'HEX':
             # Use the same column widths as single-register rows.
             formatted = format_separate_values(regs, formula, typ)
-            print(prefix + f'{formatted:>{value_width}}  '
+            emit(prefix + f'{formatted:>{value_width}}  '
                   f'{shown_unit:<{unit_width}}  [{status}]')
-        elif len(regs) > 1 and formula not in ('ASCII', 'TIME'):
+        elif typ != 'C' and len(regs) > 1 and formula not in ('ASCII', 'TIME'):
 
             # Each cell is 5 chars wide, followed by one separator space.
             # HEX: high byte then low byte, e.g. decimal 536 -> 02 18.
@@ -649,10 +718,38 @@ async def read_list(args):
                     dec = '?'
                 decimal_cells.append(f'{dec:>5}')
                 hex_cells.append(f'{raw >> 8:02X} {raw & 0xFF:02X}')
-            print(prefix + ' '.join(decimal_cells) + (f'  {shown_unit}' if shown_unit else ''))
-            print(' ' * prefix_width + ' '.join(hex_cells) + f'  [{status}]')
+            emit(prefix + ' '.join(decimal_cells) + (f'  {shown_unit}' if shown_unit else ''))
+            emit(' ' * prefix_width + ' '.join(hex_cells) + f'  [{status}]')
+        elif typ == 'C':
+            # Config values share the same right-aligned value column as I/H.
+            # Keep status on the same row even for variable-length ASCII data.
+            emit(prefix + f'{value:>{value_width}}  {shown_unit:<{unit_width}}  [{status}]')
         else:
-            print(prefix + f'{value:>{value_width}}  {shown_unit:<{unit_width}}  [{status}]')
+            emit(prefix + f'{value:>{value_width}}  {shown_unit:<{unit_width}}  [{status}]')
+    # Calculate each page's width from actual rendered rows, not a fixed 120-char rule.
+    # Explicit **SPALTE** / **SEITENUMBRUCH** starts the next screen column.
+    # No BLE reads are repeated: only the final output is rearranged.
+    page_widths = []
+    for page in pages:
+        width = max((len(line) for line in page
+                     if line not in ('__RULE__', '__DOUBLE__')), default=len(header))
+        page_widths.append(width)
+    rendered_pages = []
+    for page, width in zip(pages, page_widths):
+        rendered_pages.append([
+            '-' * width if line == '__RULE__' else
+            '=' * width if line == '__DOUBLE__' else line
+            for line in page
+        ])
+    if len(rendered_pages) == 1:
+        for line in rendered_pages[0]:
+            print(line)
+    else:
+        from itertools import zip_longest
+        for row in zip_longest(*rendered_pages, fillvalue=''):
+            # Trim the right edge: no trailing whitespace beyond the last column.
+            print('    '.join(cell.ljust(width) for cell, width in
+                              zip(row, page_widths)).rstrip())
     print(f'\n{sum(status == "OK" for *_, status in results)}/{len(results)} '
           f'Einträge erfolgreich gelesen. {transactions} BLE-Abfragen, '
           f'{time.monotonic() - started:.2f}s insgesamt.')
@@ -869,7 +966,7 @@ async def read_config_parameter(address):
 
 
 async def interactive_menu():
-    print('\nNOAH BLE REGISTER TOOL v0.6.11 (experimentell)')
+    print('\nNOAH BLE REGISTER TOOL v0.6.12 (experimentell)')
     while True:
         selected = await select_live_device(8)
         if selected is None:
