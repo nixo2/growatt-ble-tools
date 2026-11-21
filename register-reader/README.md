@@ -1,64 +1,64 @@
 # NOAH BLE TUI — Version 0.8.0
 
-**Interaktiver Registerleser und experimentelles Konfigurationswerkzeug für Growatt NOAH über Bluetooth Low Energy (BLE).**
+**Interactive register reader and experimental configuration tool for Growatt NOAH devices over Bluetooth Low Energy (BLE).**
 
-Die TUI baut auf `noah_registers.py`, `growatt_ble.py` und `protocol.py` auf. Sie ermöglicht das lokale Auslesen und — nach ausdrücklicher Bestätigung — Schreiben ausgewählter Gerätedaten, ohne die Growatt-App für diese Vorgänge zu benötigen. Das Projekt ist **inoffiziell** und steht in keiner Verbindung zu Growatt.
+The TUI builds on `noah_registers.py`, `growatt_ble.py`, and `protocol.py`. It allows you to read device data locally and, after explicit confirmation, write configuration values without using the Growatt app for these operations. This is an **unofficial** project and is not affiliated with Growatt.
 
-> **Wichtiger Sicherheitshinweis:** Schreibzugriffe und der Datenlogger-Neustart sind experimentell. Falsche Werte können Zeitpläne, Leistungsgrenzen, Netzwerkverbindungen oder andere Gerätefunktionen verändern. Nur an eigenen bzw. autorisiert verwalteten Geräten verwenden. Vor Änderungen bisherige Werte dokumentieren. Nicht alle lesbaren Register sind tatsächlich beschreibbar; ihre Bedeutung kann je nach Firmware abweichen.
+> **Safety warning:** Writing registers and restarting the data logger are experimental features. Incorrect values may affect schedules, power limits, network connectivity, or other device functions. Use this tool only on devices you own or are authorized to manage. Record original values before making changes. Not every readable register is writable, and register meanings may differ between firmware versions.
 
-## Funktionen
+## Features
 
-### Registerübersicht und Diagnose
+### Register overview and diagnostics
 
-- Zweispaltige, interaktive Terminalansicht mit unabhängiger Auswahl in beiden Spalten.
-- Darstellung der in `registers.txt` definierten **Input- (`I`), Holding- (`H`) und Konfigurationsparameter (`C`)**.
-- Auswahl per Pfeiltasten; **Enter** öffnet Registerdetails mit Adresse, Typ und Interpretation.
-- Unterstützung für Einzelregister, Registerbereiche und nicht zusammenhängende Registerlisten.
-- Darstellung von Zahlenwerten, Faktoren/Umrechnungen, Einheiten, Enumerationen, Bitfeldern, ASCII-Text und Zeitwerten entsprechend der Registerdefinition.
-- Fortschritt und Diagnose der vollständigen BLE-Abfrage werden vor dem Öffnen der Übersicht in der Konsole angezeigt.
-- **R** liest bei Bedarf die gesamte Registerliste erneut ein.
+- Interactive two-column terminal interface with independent navigation in either column.
+- Displays **input (`I`), holding (`H`), and configuration (`C`)** registers defined in `registers.txt`.
+- Navigate using arrow keys; press **Enter** to view a register's address, type, and interpretation.
+- Supports individual registers, register ranges, and non-contiguous register lists.
+- Displays numerical values, scaling factors, units, enumerations, bit fields, ASCII strings, and time values according to the register definitions.
+- Shows progress and diagnostics for the initial BLE read in the console before opening the overview.
+- Press **R** to refresh the complete register list when needed.
 
-### Kontrollierter Schreibzugriff
+### Controlled write access
 
-- **W** öffnet den Schreibdialog **innerhalb des Registerdetailfensters**; die Hauptübersicht selbst bietet keinen direkten Schreibbefehl.
-- **C-Parameter:** Schreiben einzelner ASCII-Konfigurationswerte über den Growatt-BLE-Konfigurationsbefehl `0x18`; anschließendes Kontrolllesen über `0x19`. Beispielsweise wurden MQTT-Server (Parameter 17) und MQTT-Port (Parameter 18) praktisch getestet.
-- **H-Register:** Schreiben einzelner 16-Bit-Holding-Register über Growatt-BLE-Passthrough `0x17` mit Modbus-Funktion `0x06` (FC06).
-- **Registergruppen:** Bei Einträgen wie `45–50` wird zuerst **die konkrete Registeradresse** und danach der **neue Rohwert** eingegeben. Es wird ausschließlich dieses einzelne Register geschrieben, nicht die ganze Gruppe.
-- Dezimale Rohwerte und `0x`-Hexwerte; für einzelne mit `TIME` definierte H-Register Eingabe als `HH:MM`.
-- Vor dem Schreiben: Eingabeprüfung, erneutes Lesen des alten Werts und ausdrückliche Bestätigung **„JA, schreiben“**.
-- Nach dem Schreiben: Kontrolllesen des tatsächlich übernommenen Werts. Die Anzeige verwendet den **Rücklesewert**, nicht ungeprüft die Eingabe.
-- **Gezielte Tabellenaktualisierung:** Nur der betroffene Tabelleneintrag wird aktualisiert. Bei kombinierten H-Registern werden die weiteren Gruppenmitglieder nachgelesen; die gesamte Liste muss nicht neu abgefragt werden.
-- Die Spaltenformatierung bleibt auch nach Einzelaktualisierungen erhalten.
+- Press **W** from a **register details dialog** to open the write dialog; writing is not triggered directly from the main overview.
+- **Configuration (`C`) parameters:** Write individual ASCII configuration values using Growatt BLE command `0x18`, followed by readback using `0x19`. MQTT server (parameter 17) and MQTT port (parameter 18) have been tested on real hardware.
+- **Holding (`H`) registers:** Write individual 16-bit holding registers through Growatt BLE passthrough `0x17` using Modbus function `0x06` (FC06).
+- **Register groups:** For entries such as `45–50`, choose the **specific register address** and then enter its **new raw value**. Only the selected register is written, not the entire group.
+- Supports decimal raw values and `0x` hexadecimal values; individual holding registers defined as `TIME` also accept `HH:MM` input.
+- Before writing: validates the input, reads the previous value again, and requires explicit **confirmation**.
+- After writing: reads the actual value back. The display uses the **readback value**, not an unverified requested value.
+- **Targeted table updates:** Only the affected table entry is updated. For grouped holding registers, the remaining group members are read again; a complete refresh is unnecessary.
+- Fixed column alignment is preserved after targeted updates.
 
-**Hinweis zu C-Parametern:** Auch lesbare Statusparameter (z. B. 55/60) können in der experimentellen Oberfläche zur Bearbeitung angeboten werden. Daraus folgt **nicht**, dass sie beschreibbar sind oder ein Schreibversuch sinnvoll ist.
+**Note on configuration parameters:** Readable status parameters (for example, 55 and 60) may still be offered for editing by this experimental interface. This **does not** mean that writing to them is supported or advisable.
 
-**Hinweis zu H-Registern:** Alle in `registers.txt` als `H` aufgeführten Register sind grundsätzlich im Schreibdialog erreichbar, auch unbekannte. Die TUI kennt nicht für jedes Register zulässige Wertebereiche oder Nebenwirkungen. Bei Gruppen mit ASCII-Anzeige werden **16-Bit-Rohwerte**, keine vollständigen ASCII-Zeichenfolgen geschrieben.
+**Note on holding registers:** All registers marked `H` in `registers.txt` can be accessed from the write dialog, including unknown registers. The TUI does not know every register's permitted range or side effects. For groups displayed as ASCII, writes operate on **individual 16-bit raw values**, not complete ASCII strings.
 
-### Datenlogger-Neustart
+### Data logger restart
 
-- **N** öffnet den Neustartdialog.
-- Ein Neustartbefehl wird erst nach ausdrücklicher Bestätigung gesendet.
-- Der Befehl kann die BLE- bzw. MQTT-Verbindung vorübergehend unterbrechen.
+- Press **N** to open the restart confirmation dialog.
+- The restart command is sent only after explicit confirmation.
+- Restarting may temporarily interrupt BLE or MQTT connectivity.
 
-### Verwaltung mehrerer NOAHs
+### Multiple-device management
 
-- Beim ersten Start **ohne `noah_devices.txt`** öffnet sich die Geräteverwaltung.
-- BLE-Suche nach erreichbaren NOAH-Geräten; gefundene Geräte können der gespeicherten Liste hinzugefügt oder daraus entfernt werden.
-- Bei späteren Starts öffnet sich zunächst die Auswahl der gespeicherten Geräte.
-- **G**: anderes gespeichertes Gerät auswählen; **K**: Geräteverwaltung öffnen — auch aus den Registerdetails heraus.
-- Die Geräte werden in der Datei `noah_devices.txt` gespeichert (UTF-8-Text mit JSON-Struktur).
-- **`--address`** erlaubt die direkte Auswahl einer BLE-Adresse ohne Gerätemenü.
+- On first launch, **if `noah_devices.txt` does not exist**, the device manager opens automatically.
+- Scan for nearby NOAH devices and add or remove them from the saved list.
+- On subsequent launches, choose a device from the saved list before reading its registers.
+- Press **G** to select another saved device or **K** to open device management; both actions are also available from register details.
+- Devices are stored in `noah_devices.txt` (UTF-8 text containing JSON).
+- The **`--address`** option selects a BLE address directly, bypassing the device selection menu.
 
-## Voraussetzungen
+## Requirements
 
-- Python 3.11 oder neuer empfohlen.
-- Funktionierender Bluetooth-Low-Energy-Adapter und Zugriff auf das betreffende NOAH-Gerät.
-- Terminal mit ausreichender Breite für die zweispaltige Darstellung; unter Windows wird Windows Terminal empfohlen.
-- Unter Linux muss der BLE-Adapter über BlueZ erreichbar sein. Unter Windows verwendet Bleak die Windows-Bluetooth-Schnittstelle. BLE-Adressen/Identifikatoren können zwischen Betriebssystemen abweichen; Geräte gegebenenfalls erneut suchen.
+- Python 3.11 or later recommended.
+- A working Bluetooth Low Energy adapter and access to the target NOAH device.
+- A terminal wide enough for the two-column layout; **Windows Terminal** is recommended on Windows.
+- On Linux, the BLE adapter must be accessible through BlueZ. On Windows, Bleak uses the native Windows Bluetooth interface. BLE addresses/identifiers can differ between operating systems; scan again when necessary.
 
 ## Installation
 
-Die TUI benötigt die folgenden Projektdateien **im selben Verzeichnis**:
+Place the following project files in the **same directory**:
 
 ```text
 noah-ble/
@@ -68,12 +68,12 @@ noah-ble/
 ├── protocol.py
 ├── registers.txt
 ├── requirements.txt
-└── noah_devices.txt      # wird bei Bedarf angelegt
+└── noah_devices.txt      # created when needed
 ```
 
-Die zuletzt getestete Entwicklungsdatei `noah_tui_v0_8_2.py` wird für die Veröffentlichung als **`noah_tui.py`** bereitgestellt. Die Versionsnummer **0.8.0** bezeichnet den öffentlichen Release-Stand; die interne Entwicklungsnummer muss für das Release gegebenenfalls noch angepasst werden.
+The last tested development file, `noah_tui_v0_8_2.py`, should be published as **`noah_tui.py`**. **0.8.0** is the public release version; update any internal development version string before publishing if necessary.
 
-Empfohlene `requirements.txt` (bestehende Mindestversionen beibehalten):
+Suggested `requirements.txt` (preserving existing minimum versions):
 
 ```text
 bleak>=0.21
@@ -83,7 +83,7 @@ textual
 rich
 ```
 
-`windows-curses` bleibt für gegebenenfalls vorhandene ältere curses-basierte Projektteile erhalten; die TUI selbst verwendet **Textual** und **Rich**.
+`windows-curses` is retained for any older curses-based components in the project; the new TUI itself uses **Textual** and **Rich**.
 
 ### Linux
 
@@ -105,104 +105,104 @@ python -m pip install -r requirements.txt
 python noah_tui.py
 ```
 
-Falls PowerShell die Aktivierung der virtuellen Umgebung verhindert, kann Python direkt aufgerufen werden:
+If PowerShell blocks virtual-environment activation, call its Python executable directly:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe noah_tui.py
 ```
 
-## Bedienung
+## Keyboard controls
 
-| Taste | In der Registerübersicht | In den Registerdetails |
+| Key | Register overview | Register details |
 |---|---|---|
-| `↑` / `↓` | Register auswählen | — |
-| `←` / `→` | Spalte wechseln | — |
-| `Enter` | Details und Ändern öffnen | — |
-| `W` | — | Schreibdialog für `H` bzw. geeignete `C`-Parameter |
-| `G` | Gerät auswählen | Gerät auswählen |
-| `K` | Geräte verwalten | Geräte verwalten |
-| `N` | Datenlogger-Neustart mit Sicherheitsabfrage | — |
-| `R` | Alle Register neu lesen | — |
-| `Q` | Programm beenden | Detailfenster schließen |
-| `Esc` | — | Detailfenster schließen |
+| `↑` / `↓` | Select register | — |
+| `←` / `→` | Switch column | — |
+| `Enter` | Open details and editing options | — |
+| `W` | — | Open write dialog for `H` or supported `C` parameters |
+| `G` | Select device | Select device |
+| `K` | Manage devices | Manage devices |
+| `N` | Restart data logger (with confirmation) | — |
+| `R` | Refresh all registers | — |
+| `Q` | Quit application | Close details |
+| `Esc` | — | Close details |
 
-**Typischer Schreibablauf:** Register markieren → `Enter` → `W` → Wert eingeben → **Prüfen** → angezeigte alte/neue Rohwerte kontrollieren → **JA, schreiben** → Rückleseergebnis abwarten → zur Übersicht zurückkehren. Die betreffende Tabellenzeile wird automatisch aktualisiert.
+**Typical write workflow:** Select a register → `Enter` → `W` → enter a value → **Check** → review old and new raw values → **confirm the write** → wait for readback → return to the overview. The affected table row updates automatically.
 
-### Beispiel: Einzelregister
+### Example: Single holding register
 
-Bei Holding-Register `251` (Entladegrenze) kann ein zulässiger Rohwert eingegeben und nach der Sicherheitsabfrage zurückgelesen werden. Änderungen an Lade- oder Entladegrenzen wirken sich auf das Geräteverhalten aus.
+Holding register `251` represents the discharge limit. Enter an appropriate raw value and confirm the change; the application reads it back. Changes to charge or discharge limits can affect device operation.
 
-### Beispiel: Registergruppe 45–50
+### Example: Register group 45–50
 
-Die Gruppe wird anhand bisheriger Messungen **vermutlich** als Gerätezeit interpretiert (Jahr, Monat, Tag, Stunde, Minute, Sekunde). Diese Zuordnung ist nicht offiziell bestätigt.
+Based on observations, this group **appears** to represent the device clock (year, month, day, hour, minute, second). This mapping is **not officially confirmed**.
 
-Um nur das mutmaßliche Tagesregister zu bearbeiten, im Schreibdialog **Registeradresse `47`** auswählen und darunter den gewünschten **16-Bit-Rohwert** eingeben. Andere Gruppenregister werden nicht geschrieben. Ein falscher Wert kann die interne Zeit oder zeitabhängige Funktionen beeinflussen.
+To edit only the suspected day register, select **register address `47`** in the write dialog and enter the desired **16-bit raw value**. The other registers in the group are not written. Incorrect values may affect the internal clock or time-dependent behavior.
 
-## Gerätedatei `noah_devices.txt`
+## Device file: `noah_devices.txt`
 
-Die Geräteverwaltung erzeugt eine Textdatei mit JSON-Inhalt, beispielsweise:
+The device manager creates a text file containing JSON, for example:
 
 ```json
 [
-  {"address": "AA:BB:CC:DD:EE:01", "name": "NOAH Terrasse"},
+  {"address": "AA:BB:CC:DD:EE:01", "name": "NOAH Patio"},
   {"address": "AA:BB:CC:DD:EE:02", "name": "NOAH Garage"}
 ]
 ```
 
-Die Adressen sind **Platzhalter**. Die Datei kann bei Bedarf manuell bearbeitet werden; gültige JSON-Syntax ist erforderlich. Die TUI speichert Änderungen über die Geräteverwaltung.
+The addresses above are **placeholders**. You may edit this file manually, provided the JSON remains valid. The TUI also saves changes through its device manager.
 
-## Eigene Registerdefinitionen
+## Custom register definitions
 
-Die Datei `registers.txt` bestimmt, welche Register gelesen und angezeigt werden. Sie unterstützt Registertypen `I`, `H` und `C`, einzelne Adressen, Bereiche, Registerlisten sowie Formatierungsangaben und Abschnittsüberschriften. Die TUI übernimmt die Interpretation aus dem vorhandenen Registerleser `noah_registers.py`.
+`registers.txt` controls which registers are read and displayed. It supports register types `I`, `H`, and `C`, individual addresses, ranges, lists, formatting instructions, and section headers. The TUI uses the existing `noah_registers.py` reader to interpret these definitions.
 
-Nicht dokumentierte Register sollten vor dem Schreiben zunächst über längere Zeit beobachtet und mit bekannten Betriebszuständen verglichen werden.
+Before attempting writes to undocumented registers, observe their values over time and compare them with known operating states.
 
-## Kommandozeilenoptionen
+## Command-line options
 
 ```bash
 python noah_tui.py
 python noah_tui.py --address AA:BB:CC:DD:EE:FF
-python noah_tui.py --file /pfad/zu/registers.txt
+python noah_tui.py --file /path/to/registers.txt
 ```
 
-Die Adresse bei `--address` muss zum jeweiligen Betriebssystem und BLE-Backend passen.
+The address passed to `--address` must be valid for the operating system and BLE backend in use.
 
-## Technischer Hintergrund
+## Technical background
 
-- **BLE:** Kommunikation über `bleak` und die vorhandenen Projektmodule `growatt_ble.py` / `protocol.py`.
-- **Registerlesen:** Modbus-Funktionen `0x03` (Holding) und `0x04` (Input) im Growatt-BLE-Passthrough `0x17`.
-- **Holding-Schreiben:** Modbus `0x06` (ein Register) im Passthrough `0x17`.
-- **Konfigurationsparameter:** Growatt-Konfigurationsbefehle `0x18` (Schreiben) und `0x19` (Lesen).
-- **TUI:** `textual` / `rich`.
-- **Darstellung:** Wiederverwendung der Registerdefinitionen und Umrechnungen aus `noah_registers.py`.
+- **BLE:** Communication via `bleak` and the project's `growatt_ble.py` / `protocol.py` modules.
+- **Register reads:** Modbus function `0x03` (holding) and `0x04` (input) over Growatt BLE passthrough `0x17`.
+- **Holding-register writes:** Modbus `0x06` (single register) over passthrough `0x17`.
+- **Configuration parameters:** Growatt commands `0x18` (write) and `0x19` (read).
+- **TUI:** `textual` and `rich`.
+- **Formatting:** Reuses register definitions and conversions from `noah_registers.py`.
 
-Das Lesen und Schreiben der MQTT-Konfiguration wurde an einem realen NOAH erprobt; nach Änderung der MQTT-Serveradresse wurden tatsächlich Daten am eigenen MQTT-/Node-RED-System empfangen. Daraus lässt sich **keine allgemeine Kompatibilitätsgarantie** für alle Firmwarestände oder alle Register ableiten.
+Reading and writing MQTT configuration has been tested on a real NOAH: after changing the MQTT server address, messages were received by a local MQTT/Node-RED setup. This **does not guarantee** compatibility with every firmware version or register.
 
-## Neuerungen des 0.8.0-Releases
+## What's new in 0.8.0
 
-Gegenüber dem früheren reinen Registerleser bietet die interaktive Ausgabe insbesondere:
+Compared with the earlier command-line register reader, this release adds:
 
-1. Vollbild-TUI mit zwei unabhängig navigierbaren Registerspalten.
-2. Registerdetailfenster mit integrierter Schreibfunktion (`Enter` → `W`).
-3. Bestätigtes ASCII-Schreiben von Growatt-Konfigurationsparametern.
-4. Experimentelles Schreiben aller definierten Holding-Register, einschließlich einzelner Mitglieder von Registergruppen.
-5. Vorab-Lesen, explizite Sicherheitsabfrage und Kontrolllesen nach Schreibzugriffen.
-6. Neustartfunktion für den Datenlogger mit Sicherheitsabfrage.
-7. Persistente Geräteverwaltung mit BLE-Suche, Geräteauswahl und Gerätewechsel.
-8. Gezielte Aktualisierung geänderter Tabellenzeilen ohne vollständige neue BLE-Abfrage.
-9. Korrigierte feste Spaltenformatierung bei der gezielten Aktualisierung.
-10. Manuelles vollständiges Neueinlesen (`R`) weiterhin jederzeit möglich.
+1. Full-screen TUI with two independently navigable register columns.
+2. Register details with integrated write access (`Enter` → `W`).
+3. Hardware-tested ASCII writes to Growatt configuration parameters.
+4. Experimental write access to all defined holding registers, including individual registers within groups.
+5. Pre-write readback, explicit confirmation, and post-write verification.
+6. Data logger restart with a confirmation dialog.
+7. Persistent device management, BLE scanning, device selection, and device switching.
+8. Targeted table updates after writes without a complete BLE refresh.
+9. Fixed column alignment during targeted updates.
+10. Full manual refresh still available at any time (`R`).
 
-## Grenzen und bekannte Risiken
+## Limitations and known risks
 
-- Keine Garantie, dass jedes in `registers.txt` definierte `H`- oder `C`-Register tatsächlich beschreibbar ist.
-- Keine vollständige Validierung gerätespezifischer Wertebereiche für unbekannte Holding-Register.
-- Schreibzugriffe auf Registergruppen betreffen immer nur **ein** 16-Bit-Register pro Vorgang.
-- Bei einer abgebrochenen BLE-Verbindung kann der tatsächliche Schreibzustand unklar sein; in diesem Fall vor erneutem Schreiben erst auslesen.
-- Eine erfolgreiche Lesekontrolle beweist nicht automatisch, dass eine Einstellung nach jedem Neustart dauerhaft erhalten bleibt.
-- Bluetooth-Erkennung und Berechtigungen unterscheiden sich zwischen Linux und Windows.
+- Not every `H` or `C` register defined in `registers.txt` is necessarily writable.
+- Unknown holding registers do not have comprehensive device-specific range validation.
+- Writing to a register group changes **only one 16-bit register** per operation.
+- If BLE disconnects during a write, the final device state may be unknown; read the value again before retrying.
+- Successful readback does not prove that a setting will persist after every reboot.
+- Bluetooth discovery and permissions differ between Linux and Windows.
 
-## Lizenz
+## License
 
-Es gelten die Lizenz- und Hinweisdateien (`LICENSE`, `NOTICE`) des jeweiligen Projekt-Repositories. Vor der Veröffentlichung bitte prüfen, dass diese Dateien zusammen mit den übernommenen Projektmodulen ausgeliefert werden.
+The license and notice files (`LICENSE`, `NOTICE`) from the relevant project repository apply. Before publishing, ensure these files are distributed alongside any reused project modules.
