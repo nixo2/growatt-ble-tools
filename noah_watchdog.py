@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Growatt NOAH BLE Watchdog v0.3.0 – experimental, opt-in recovery."""
+"""Growatt NOAH BLE Watchdog v0.4.2 – experimental, opt-in recovery."""
 import argparse
 import asyncio
 import configparser
@@ -9,6 +9,7 @@ import io
 import json
 import logging
 import os
+import re
 from pathlib import Path
 import sys
 import time
@@ -160,6 +161,47 @@ def decode(raw):
     return raw.decode('utf-8', errors='replace').strip('\x00') if isinstance(raw, bytes) else str(raw)
 
 
+class MQTTRecoveryError(Exception):
+    """MQTT configuration repair was attempted but could not be verified."""
+
+
+def mqtt_target(cp):
+    return {p.P_MQTT_HOST: cp.get('MQTT', 'host'),
+            p.P_MQTT_PORT: cp.get('MQTT', 'port')}
+
+
+def mqtt_differences(values, cp):
+    """Compare only complete, successfully read values; never guess missing data."""
+    target = mqtt_target(cp)
+    missing = [pid for pid in target if pid not in values or values[pid] is None]
+    if missing:
+        raise ValueError('MQTT-Konfigurationsabfrage unvollständig')
+    return [(pid, expected) for pid, expected in target.items()
+            if decode(values[pid]) != expected]
+
+
+async def repair_mqtt(noah, device, cp, logger, current=None):
+    """Update differing MQTT fields only, then verify by querying again."""
+    name, address = device.get('name', ''), device['address']
+    if current is None:
+        current = await noah.query([p.P_MQTT_HOST, p.P_MQTT_PORT])
+    updates = mqtt_differences(current, cp)
+    if not updates:
+        return False
+    logger.warning('%s %s | MQTT RECOVERY START: Abweichung bei %s erkannt; stelle Sollwerte wieder her',
+                   name, address, ', '.join(p.PARAM_NAMES.get(pid, str(pid)) for pid, _ in updates))
+    try:
+        await noah.set_params(updates)
+        verified = await noah.query([p.P_MQTT_HOST, p.P_MQTT_PORT])
+        remaining = mqtt_differences(verified, cp)
+        if remaining:
+            raise ValueError('MQTT-Konfiguration nach Schreibzugriff weiterhin abweichend')
+    except Exception as exc:
+        raise MQTTRecoveryError('MQTT-Korrektur oder Verifikation fehlgeschlagen') from exc
+    logger.warning('%s %s | MQTT RECOVERY ERFOLGREICH: Sollwerte geschrieben und verifiziert', name, address)
+    return True
+
+
 async def recovery(noah, device, options, cp, logger):
     """Perform selected steps in order; reconnect separately after the 30-second delay."""
     name, address = device.get('name', ''), device['address']
@@ -171,14 +213,8 @@ async def recovery(noah, device, options, cp, logger):
         logger.warning('%s %s | RECOVERY WLAN-Daten erneut übertragen', name, address)
     if options['mqtt']:
         actions.append('MQTT')
-        current = await noah.query([p.P_MQTT_HOST, p.P_MQTT_PORT])
-        target = {p.P_MQTT_HOST: cp.get('MQTT', 'host'), p.P_MQTT_PORT: cp.get('MQTT', 'port')}
-        updates = [(pid, value) for pid, value in target.items() if decode(current.get(pid, b'')) != value]
-        if updates:
-            await noah.set_params(updates)
-            logger.warning('%s %s | RECOVERY MQTT-Abweichung korrigiert (%s)', name, address,
-                           ', '.join(p.PARAM_NAMES.get(pid, str(pid)) for pid, _ in updates))
-        else:
+        changed = await repair_mqtt(noah, device, cp, logger)
+        if not changed:
             logger.warning('%s %s | RECOVERY MQTT-Sollwerte bereits vorhanden', name, address)
     if options['restart']:
         actions.append('Restart')
@@ -196,12 +232,42 @@ async def poll_one(device, options, cp, streak):
         with contextlib.redirect_stdout(output):
             async with asyncio.timeout(35):
                 async with NoahBle(address) as noah:
-                    values = await noah.query([p.P_WIFI_STATUS, p.P_CONNECTION_STATE])
-        if options['logging']:
-            for line in output.getvalue().splitlines():
-                logger.info('%s %s | %s', name, address, line.strip())
+                    requested = [p.P_WIFI_STATUS, p.P_CONNECTION_STATE]
+                    if options['mqtt']:
+                        requested.extend((p.P_MQTT_HOST, p.P_MQTT_PORT))
+                    values = await noah.query(requested)
+                    # MQTT consistency is checked on EVERY successful poll,
+                    # independently of the connection-state recovery threshold.
+                    if options['mqtt']:
+                        try:
+                            mqtt_changed = await repair_mqtt(noah, device, cp, logger, values)
+                            if options['logging'] and not mqtt_changed:
+                                logger.info('%s %s | MQTT PRÜFUNG OK: Server und Port stimmen mit credentials.txt überein',
+                                            name, address)
+                        except MQTTRecoveryError as exc:
+                            logger.error('%s %s | MQTT RECOVERY FEHLGESCHLAGEN: %s',
+                                         name, address, type(exc.__cause__).__name__ if exc.__cause__ else type(exc).__name__)
+                        except Exception as exc:
+                            logger.error('%s %s | MQTT PRÜFUNG FEHLGESCHLAGEN: %s',
+                                         name, address, type(exc).__name__)
         wifi = decode(values.get(p.P_WIFI_STATUS, b''))
         state = decode(values.get(p.P_CONNECTION_STATE, b''))
+        if options['logging']:
+            # Log only allowlisted protocol metadata. Never forward raw MQTT
+            # query responses, which may include credentials or broker details.
+            for line in output.getvalue().splitlines():
+                if re.fullmatch(r'dev->app SET-ACK sn=[A-Za-z0-9]+ count=\d+ status=\d+', line.strip()):
+                    logger.info('%s %s | %s', name, address, line.strip())
+                elif line.strip().startswith('dev->app QUERY-RSP '):
+                    match = re.match(r'dev->app QUERY-RSP sn=([A-Za-z0-9]+) status=(\d+)(?:\s|$)', line.strip())
+                    if match:
+                        logger.info('%s %s | dev->app QUERY-RSP sn=%s status=%s wifi_status=%r, connection_state=%r',
+                                    name, address, match.group(1), match.group(2),
+                                    values.get(p.P_WIFI_STATUS, b''), values.get(p.P_CONNECTION_STATE, b''))
+            # Keep a status line even if a library version changes its stdout format.
+            if not any(line.strip().startswith('dev->app QUERY-RSP ') for line in output.getvalue().splitlines()):
+                logger.info('%s %s | STATUS wifi_status=%r, connection_state=%r',
+                            name, address, values.get(p.P_WIFI_STATUS, b''), values.get(p.P_CONNECTION_STATE, b''))
         if wifi == '0' and state != '16' and state != '':
             streak[address] = streak.get(address, 0) + 1
         else:
@@ -220,7 +286,11 @@ async def poll_one(device, options, cp, streak):
                         actions = await recovery(noah, device, options, cp, logger)
         except Exception as exc:
             # Never expose exception messages here: BLE/library exceptions can contain data.
-            logger.error('%s %s | RECOVERY Aktion fehlgeschlagen: %s', name, address, type(exc).__name__)
+            if isinstance(exc, MQTTRecoveryError):
+                logger.error('%s %s | MQTT RECOVERY FEHLGESCHLAGEN: %s',
+                             name, address, type(exc.__cause__).__name__ if exc.__cause__ else type(exc).__name__)
+            else:
+                logger.error('%s %s | RECOVERY Aktion fehlgeschlagen: %s', name, address, type(exc).__name__)
             return
         logger.warning('%s %s | RECOVERY Maßnahmen: %s; warte 30 Sekunden', name, address, actions)
         await asyncio.sleep(30)
