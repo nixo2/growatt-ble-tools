@@ -1,208 +1,245 @@
-# NOAH BLE TUI — Version 0.8.0
+# Growatt NOAH – BLE-Registerdiagnose und Terminal-Oberfläche
 
-**Interaktiver Registerleser und experimentelles Konfigurationswerkzeug für Growatt NOAH über Bluetooth Low Energy (BLE).**
+**Stand: 22. November 2026**  
+**`noah_registers.py` v0.6.22 · `noah_tui.py` v0.8.7**
 
-Die TUI baut auf `noah_registers.py`, `growatt_ble.py` und `protocol.py` auf. Sie ermöglicht das lokale Auslesen und — nach ausdrücklicher Bestätigung — Schreiben ausgewählter Gerätedaten, ohne die Growatt-App für diese Vorgänge zu benötigen. Das Projekt ist **inoffiziell** und steht in keiner Verbindung zu Growatt.
+Zwei Python-Programme zum direkten Auslesen und zur Diagnose von Growatt-NOAH-Speichern über Bluetooth Low Energy (BLE):
 
-> **Wichtiger Sicherheitshinweis:** Schreibzugriffe und der Datenlogger-Neustart sind experimentell. Falsche Werte können Zeitpläne, Leistungsgrenzen, Netzwerkverbindungen oder andere Gerätefunktionen verändern. Nur an eigenen bzw. autorisiert verwalteten Geräten verwenden. Vor Änderungen bisherige Werte dokumentieren. Nicht alle lesbaren Register sind tatsächlich beschreibbar; ihre Bedeutung kann je nach Firmware abweichen.
+- **`noah_registers.py`**: Kommandozeilenwerkzeug für Gerätesuche, Einzelabfragen, Registerlisten und Diagnose.
+- **`noah_tui.py`**: interaktive Terminaloberfläche auf Basis von Textual mit Geräteverwaltung, zweispaltiger Registeranzeige, Detailansichten und ausgewählten Schreibfunktionen.
 
-## Funktionen
+Die Programme nutzen die vorhandenen Module `protocol.py` und `growatt_ble.py`. Für BLE-Abfragen ist keine Growatt-Cloud und kein MQTT erforderlich. Das Projekt ist **inoffiziell und experimentell**; insbesondere Registerbedeutungen und Schreibzugriffe sind nicht durch Growatt für diese Anwendung freigegeben.
 
-### Registerübersicht und Diagnose
+## 1. Voraussetzungen und Dateien
 
-- Zweispaltige, interaktive Terminalansicht mit unabhängiger Auswahl in beiden Spalten.
-- Darstellung der in `registers.txt` definierten **Input- (`I`), Holding- (`H`) und Konfigurationsparameter (`C`)**.
-- Auswahl per Pfeiltasten; **Enter** öffnet Registerdetails mit Adresse, Typ und Interpretation.
-- Unterstützung für Einzelregister, Registerbereiche und nicht zusammenhängende Registerlisten.
-- Darstellung von Zahlenwerten, Faktoren/Umrechnungen, Einheiten, Enumerationen, Bitfeldern, ASCII-Text und Zeitwerten entsprechend der Registerdefinition.
-- Fortschritt und Diagnose der vollständigen BLE-Abfrage werden vor dem Öffnen der Übersicht in der Konsole angezeigt.
-- **R** liest bei Bedarf die gesamte Registerliste erneut ein.
-
-### Kontrollierter Schreibzugriff
-
-- **W** öffnet den Schreibdialog **innerhalb des Registerdetailfensters**; die Hauptübersicht selbst bietet keinen direkten Schreibbefehl.
-- **C-Parameter:** Schreiben einzelner ASCII-Konfigurationswerte über den Growatt-BLE-Konfigurationsbefehl `0x18`; anschließendes Kontrolllesen über `0x19`. Beispielsweise wurden MQTT-Server (Parameter 17) und MQTT-Port (Parameter 18) praktisch getestet.
-- **H-Register:** Schreiben einzelner 16-Bit-Holding-Register über Growatt-BLE-Passthrough `0x17` mit Modbus-Funktion `0x06` (FC06).
-- **Registergruppen:** Bei Einträgen wie `45–50` wird zuerst **die konkrete Registeradresse** und danach der **neue Rohwert** eingegeben. Es wird ausschließlich dieses einzelne Register geschrieben, nicht die ganze Gruppe.
-- Dezimale Rohwerte und `0x`-Hexwerte; für einzelne mit `TIME` definierte H-Register Eingabe als `HH:MM`.
-- Vor dem Schreiben: Eingabeprüfung, erneutes Lesen des alten Werts und ausdrückliche Bestätigung **„JA, schreiben“**.
-- Nach dem Schreiben: Kontrolllesen des tatsächlich übernommenen Werts. Die Anzeige verwendet den **Rücklesewert**, nicht ungeprüft die Eingabe.
-- **Gezielte Tabellenaktualisierung:** Nur der betroffene Tabelleneintrag wird aktualisiert. Bei kombinierten H-Registern werden die weiteren Gruppenmitglieder nachgelesen; die gesamte Liste muss nicht neu abgefragt werden.
-- Die Spaltenformatierung bleibt auch nach Einzelaktualisierungen erhalten.
-
-**Hinweis zu C-Parametern:** Auch lesbare Statusparameter (z. B. 55/60) können in der experimentellen Oberfläche zur Bearbeitung angeboten werden. Daraus folgt **nicht**, dass sie beschreibbar sind oder ein Schreibversuch sinnvoll ist.
-
-**Hinweis zu H-Registern:** Alle in `registers.txt` als `H` aufgeführten Register sind grundsätzlich im Schreibdialog erreichbar, auch unbekannte. Die TUI kennt nicht für jedes Register zulässige Wertebereiche oder Nebenwirkungen. Bei Gruppen mit ASCII-Anzeige werden **16-Bit-Rohwerte**, keine vollständigen ASCII-Zeichenfolgen geschrieben.
-
-### Datenlogger-Neustart
-
-- **N** öffnet den Neustartdialog.
-- Ein Neustartbefehl wird erst nach ausdrücklicher Bestätigung gesendet.
-- Der Befehl kann die BLE- bzw. MQTT-Verbindung vorübergehend unterbrechen.
-
-### Verwaltung mehrerer NOAHs
-
-- Beim ersten Start **ohne `noah_devices.txt`** öffnet sich die Geräteverwaltung.
-- BLE-Suche nach erreichbaren NOAH-Geräten; gefundene Geräte können der gespeicherten Liste hinzugefügt oder daraus entfernt werden.
-- Bei späteren Starts öffnet sich zunächst die Auswahl der gespeicherten Geräte.
-- **G**: anderes gespeichertes Gerät auswählen; **K**: Geräteverwaltung öffnen — auch aus den Registerdetails heraus.
-- Die Geräte werden in der Datei `noah_devices.txt` gespeichert (UTF-8-Text mit JSON-Struktur).
-- **`--address`** erlaubt die direkte Auswahl einer BLE-Adresse ohne Gerätemenü.
-
-## Voraussetzungen
-
-- Python 3.11 oder neuer empfohlen.
-- Funktionierender Bluetooth-Low-Energy-Adapter und Zugriff auf das betreffende NOAH-Gerät.
-- Terminal mit ausreichender Breite für die zweispaltige Darstellung; unter Windows wird Windows Terminal empfohlen.
-- Unter Linux muss der BLE-Adapter über BlueZ erreichbar sein. Unter Windows verwendet Bleak die Windows-Bluetooth-Schnittstelle. BLE-Adressen/Identifikatoren können zwischen Betriebssystemen abweichen; Geräte gegebenenfalls erneut suchen.
-
-## Installation
-
-Die TUI benötigt die folgenden Projektdateien **im selben Verzeichnis**:
-
-```text
-noah-ble/
-├── noah_tui.py
-├── noah_registers.py
-├── growatt_ble.py
-├── protocol.py
-├── registers.txt
-├── requirements.txt
-└── noah_devices.txt      # wird bei Bedarf angelegt
-```
-
-Die zuletzt getestete Entwicklungsdatei `noah_tui_v0_8_2.py` wird für die Veröffentlichung als **`noah_tui.py`** bereitgestellt. Die Versionsnummer **0.8.0** bezeichnet den öffentlichen Release-Stand; die interne Entwicklungsnummer muss für das Release gegebenenfalls noch angepasst werden.
-
-Empfohlene `requirements.txt` (bestehende Mindestversionen beibehalten):
-
-```text
-bleak>=0.21
-cryptography>=42
-windows-curses; sys_platform == "win32"
-textual
-rich
-```
-
-`windows-curses` bleibt für gegebenenfalls vorhandene ältere curses-basierte Projektteile erhalten; die TUI selbst verwendet **Textual** und **Rich**.
-
-### Linux
+Ein Computer mit funktionierendem BLE-Adapter, Python 3 und Zugriff auf die Bluetooth-Schnittstelle. Die Programme importieren `bleak`; die TUI benötigt zusätzlich `textual` und `rich` (Rich wird üblicherweise mit Textual installiert).
 
 ```bash
-cd ~/growatt-ble
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements.txt
-python noah_tui.py
+python -m pip install bleak textual rich
 ```
 
-### Windows (PowerShell)
+Die Dateien müssen im selben Projektverzeichnis liegen:
 
-```powershell
-cd C:\NOAH-BLE
-py -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-python noah_tui.py
+```text
+projekt/
+├── noah_registers.py       # v0.6.22
+├── noah_tui.py             # v0.8.7
+├── protocol.py             # BLE-Protokollmodul
+├── growatt_ble.py          # BLE-Gerätekommunikation
+├── registers.txt           # Registerauswahl, Umrechnung, Layout
+├── register_info.txt       # optional: Erläuterungen im Detailfenster
+└── noah_devices.txt        # von der TUI verwaltete Geräteliste
 ```
 
-Falls PowerShell die Aktivierung der virtuellen Umgebung verhindert, kann Python direkt aufgerufen werden:
+**Hinweis zu Versionsdateien:** Die gelieferten Dateien `noah_registers_v0_6_22.py` und `noah_tui_v0_8_7.py` vor dem Start zu `noah_registers.py` beziehungsweise `noah_tui.py` umbenennen. Die TUI importiert ausdrücklich `noah_registers`.
 
-```powershell
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe noah_tui.py
-```
+## 2. Schnellstart
 
-## Bedienung
-
-| Taste | In der Registerübersicht | In den Registerdetails |
-|---|---|---|
-| `↑` / `↓` | Register auswählen | — |
-| `←` / `→` | Spalte wechseln | — |
-| `Enter` | Details und Ändern öffnen | — |
-| `W` | — | Schreibdialog für `H` bzw. geeignete `C`-Parameter |
-| `G` | Gerät auswählen | Gerät auswählen |
-| `K` | Geräte verwalten | Geräte verwalten |
-| `N` | Datenlogger-Neustart mit Sicherheitsabfrage | — |
-| `R` | Alle Register neu lesen | — |
-| `Q` | Programm beenden | Detailfenster schließen |
-| `Esc` | — | Detailfenster schließen |
-
-**Typischer Schreibablauf:** Register markieren → `Enter` → `W` → Wert eingeben → **Prüfen** → angezeigte alte/neue Rohwerte kontrollieren → **JA, schreiben** → Rückleseergebnis abwarten → zur Übersicht zurückkehren. Die betreffende Tabellenzeile wird automatisch aktualisiert.
-
-### Beispiel: Einzelregister
-
-Bei Holding-Register `251` (Entladegrenze) kann ein zulässiger Rohwert eingegeben und nach der Sicherheitsabfrage zurückgelesen werden. Änderungen an Lade- oder Entladegrenzen wirken sich auf das Geräteverhalten aus.
-
-### Beispiel: Registergruppe 45–50
-
-Die Gruppe wird anhand bisheriger Messungen **vermutlich** als Gerätezeit interpretiert (Jahr, Monat, Tag, Stunde, Minute, Sekunde). Diese Zuordnung ist nicht offiziell bestätigt.
-
-Um nur das mutmaßliche Tagesregister zu bearbeiten, im Schreibdialog **Registeradresse `47`** auswählen und darunter den gewünschten **16-Bit-Rohwert** eingeben. Andere Gruppenregister werden nicht geschrieben. Ein falscher Wert kann die interne Zeit oder zeitabhängige Funktionen beeinflussen.
-
-## Gerätedatei `noah_devices.txt`
-
-Die Geräteverwaltung erzeugt eine Textdatei mit JSON-Inhalt, beispielsweise:
-
-```json
-[
-  {"address": "AA:BB:CC:DD:EE:01", "name": "NOAH Terrasse"},
-  {"address": "AA:BB:CC:DD:EE:02", "name": "NOAH Garage"}
-]
-```
-
-Die Adressen sind **Platzhalter**. Die Datei kann bei Bedarf manuell bearbeitet werden; gültige JSON-Syntax ist erforderlich. Die TUI speichert Änderungen über die Geräteverwaltung.
-
-## Eigene Registerdefinitionen
-
-Die Datei `registers.txt` bestimmt, welche Register gelesen und angezeigt werden. Sie unterstützt Registertypen `I`, `H` und `C`, einzelne Adressen, Bereiche, Registerlisten sowie Formatierungsangaben und Abschnittsüberschriften. Die TUI übernimmt die Interpretation aus dem vorhandenen Registerleser `noah_registers.py`.
-
-Nicht dokumentierte Register sollten vor dem Schreiben zunächst über längere Zeit beobachtet und mit bekannten Betriebszuständen verglichen werden.
-
-## Kommandozeilenoptionen
+**TUI mit Geräteauswahl:**
 
 ```bash
 python noah_tui.py
-python noah_tui.py --address AA:BB:CC:DD:EE:FF
-python noah_tui.py --file /pfad/zu/registers.txt
 ```
 
-Die Adresse bei `--address` muss zum jeweiligen Betriebssystem und BLE-Backend passen.
+**TUI mit direkter BLE-Adresse:**
 
-## Technischer Hintergrund
+```bash
+python noah_tui.py --address 'AA:BB:CC:DD:EE:FF'
+```
 
-- **BLE:** Kommunikation über `bleak` und die vorhandenen Projektmodule `growatt_ble.py` / `protocol.py`.
-- **Registerlesen:** Modbus-Funktionen `0x03` (Holding) und `0x04` (Input) im Growatt-BLE-Passthrough `0x17`.
-- **Holding-Schreiben:** Modbus `0x06` (ein Register) im Passthrough `0x17`.
-- **Konfigurationsparameter:** Growatt-Konfigurationsbefehle `0x18` (Schreiben) und `0x19` (Lesen).
-- **TUI:** `textual` / `rich`.
-- **Darstellung:** Wiederverwendung der Registerdefinitionen und Umrechnungen aus `noah_registers.py`.
+**Andere Registerdatei verwenden:**
 
-Das Lesen und Schreiben der MQTT-Konfiguration wurde an einem realen NOAH erprobt; nach Änderung der MQTT-Serveradresse wurden tatsächlich Daten am eigenen MQTT-/Node-RED-System empfangen. Daraus lässt sich **keine allgemeine Kompatibilitätsgarantie** für alle Firmwarestände oder alle Register ableiten.
+```bash
+python noah_tui.py --file registers.txt
+```
 
-## Neuerungen des 0.8.0-Releases
+**Kommandozeile – Geräte suchen:**
 
-Gegenüber dem früheren reinen Registerleser bietet die interaktive Ausgabe insbesondere:
+```bash
+python noah_registers.py scan --seconds 8
+```
 
-1. Vollbild-TUI mit zwei unabhängig navigierbaren Registerspalten.
-2. Registerdetailfenster mit integrierter Schreibfunktion (`Enter` → `W`).
-3. Bestätigtes ASCII-Schreiben von Growatt-Konfigurationsparametern.
-4. Experimentelles Schreiben aller definierten Holding-Register, einschließlich einzelner Mitglieder von Registergruppen.
-5. Vorab-Lesen, explizite Sicherheitsabfrage und Kontrolllesen nach Schreibzugriffen.
-6. Neustartfunktion für den Datenlogger mit Sicherheitsabfrage.
-7. Persistente Geräteverwaltung mit BLE-Suche, Geräteauswahl und Gerätewechsel.
-8. Gezielte Aktualisierung geänderter Tabellenzeilen ohne vollständige neue BLE-Abfrage.
-9. Korrigierte feste Spaltenformatierung bei der gezielten Aktualisierung.
-10. Manuelles vollständiges Neueinlesen (`R`) weiterhin jederzeit möglich.
+**Kommandozeile – Registerliste ausgeben:**
 
-## Grenzen und bekannte Risiken
+```bash
+python noah_registers.py list --address 'AA:BB:CC:DD:EE:FF' --file registers.txt
+```
 
-- Keine Garantie, dass jedes in `registers.txt` definierte `H`- oder `C`-Register tatsächlich beschreibbar ist.
-- Keine vollständige Validierung gerätespezifischer Wertebereiche für unbekannte Holding-Register.
-- Schreibzugriffe auf Registergruppen betreffen immer nur **ein** 16-Bit-Register pro Vorgang.
-- Bei einer abgebrochenen BLE-Verbindung kann der tatsächliche Schreibzustand unklar sein; in diesem Fall vor erneutem Schreiben erst auslesen.
-- Eine erfolgreiche Lesekontrolle beweist nicht automatisch, dass eine Einstellung nach jedem Neustart dauerhaft erhalten bleibt.
-- Bluetooth-Erkennung und Berechtigungen unterscheiden sich zwischen Linux und Windows.
+**Einzelnes Input-Register auslesen:**
 
-## Lizenz
+```bash
+python noah_registers.py read --address 'AA:BB:CC:DD:EE:FF' --type input --register 120
+```
 
-Es gelten die Lizenz- und Hinweisdateien (`LICENSE`, `NOTICE`) des jeweiligen Projekt-Repositories. Vor der Veröffentlichung bitte prüfen, dass diese Dateien zusammen mit den übernommenen Projektmodulen ausgeliefert werden.
+**Holding-Register auslesen:**
+
+```bash
+python noah_registers.py read --address 'AA:BB:CC:DD:EE:FF' --type holding --register 254 --count 5
+```
+
+Ohne Unterbefehl startet `noah_registers.py` sein interaktives Diagnosemenü.
+
+## 3. Registertypen und Transport
+
+| Kürzel | Datenquelle | Leseweg | Datentyp |
+|---|---|---|---|
+| `I` | Input-Register | Growatt BLE `0x17`, darin Modbus FC04 | 16-Bit-Wörter |
+| `H` | Holding-Register | Growatt BLE `0x17`, darin Modbus FC03 | 16-Bit-Wörter |
+| `C` | Growatt-Konfigurationsparameter | Growatt BLE `0x19` (QUERY) | Bytefolgen variabler Länge, oft ASCII |
+| `I,C` / `H,C` | Gemischte Quellen | beide passenden Lesewege | kombinierte **Anzeige**, kein gemeinsames physisches Register |
+
+Ein Holding-Register ist nicht automatisch ein Datalogger-Parameter. Der `C`-Bereich ist ein separater Growatt-Konfigurationszugriff.
+
+### Optimierte Input-Abfragen
+
+Für die Input-Register im Bereich **I:0–123** verwendet die aktuelle Implementierung experimentell bestätigte 16-Wort-Lesefenster:
+
+```text
+0–15, 16–31, 32–47, 48–63,
+64–79, 80–95, 96–111, 108–123
+```
+
+Das letzte Fenster überlappt absichtlich. Diese Optimierung ist wichtig: Einzelabfragen von I:119/I:120 waren bei Tests nicht zuverlässig, während der 16er-Block erfolgreich war. Holding- und Config-Abfragen verwenden weiterhin ihre eigenen Verfahren. Register außerhalb der bestätigten Fenster werden mit der bisherigen Abfragelogik behandelt.
+
+## 4. Aufbau der `registers.txt`
+
+Grundformat (UTF-8), ein Eintrag pro Zeile:
+
+```text
+Register|Bezeichnung|Faktor|Einheit|Registertyp
+```
+
+Beispiele:
+
+```text
+101|Ladezyklen|1|Zyklen|I
+102|SOH|1|%|I
+119-120|Firmware-Teile|CombLBHBLB|.|I
+21|Firmware-Zusatz|ASCII||C
+119-120,21|Firmware|CombLBHBLB+ASCIIstrip(.)|.|I,C
+```
+
+Die fünfte Spalte ist optional; ohne Angabe wird `I` angenommen. Kommentarzeilen beginnen mit `#`, Leerzeilen werden ignoriert.
+
+### Registerangaben
+
+- `119`: einzelnes Register.
+- `119-120`: zusammenhängender Bereich einschließlich beider Grenzen.
+- `100->16`: 16 Register ab Adresse 100 (100 bis 115).
+- `30,42`: explizite Liste einzelner Register.
+- `119-120,21` mit Typ `I,C`: **erste Gruppe** Input-Register 119–120, **zweite Gruppe** Config-Parameter 21.
+
+Die derzeitige gemischte Syntax unterstützt konkret `I,C` und `H,C` mit einem Modbus-Bereich und **einer** C-Parameter-ID. Sie ist kein beliebig erweiterbarer Ausdrucksparser.
+
+### Faktoren und Darstellungsformen
+
+| Faktor | Bedeutung |
+|---|---|
+| `1`, `0.1`, `0.01` | Multiplikation des Rohwerts |
+| `*0.1 -273.1` | arithmetische Umrechnung |
+| `ASCII` | 16-Bit-Wörter als ASCII bzw. C-Parameter als Zeichenfolge |
+| `HEX` | hexadezimale Byteanzeige |
+| `TIME` | Uhrzeit aus High-Byte (Stunden) und Low-Byte (Minuten) |
+| `bit3-0` | ausgewählte Bits als Bitfolge |
+| `CombLBHBLB` | ausgewählte Bytes mehrerer 16-Bit-Wörter kombinieren |
+| `CombLBHBLB+ASCIIstrip(.)` | ausgewählte Bytes plus bereinigte C-ASCII-Zeichenfolge |
+
+Weitere unterstützte Optionen bei numerischen Formeln sind `NULL0`, `NULL65535` und `NOHEX`. Bei numerischen Statuswerten kann die Einheitsspalte auch eine Legende enthalten, beispielsweise `0 Aus, 1 Ein`.
+
+### Firmwareversion vollständig zusammensetzen
+
+**Empfohlene Zeile:**
+
+```text
+119-120,21|Firmware|CombLBHBLB+ASCIIstrip(.)|.|I,C
+```
+
+Die bekannten Rohwerte sind:
+
+```text
+I:119 = 0x0013  → Low-Byte  = 19
+I:120 = 0x140E  → High-Byte = 20; Low-Byte = 14
+C:21  = "4.0.2.6" (ASCII)
+```
+
+Die numerischen Teilwerte bekommen **jeweils auch nach dem letzten Wert** das Suffix aus der Einheitsspalte (`.`): `19.20.14.`. `ASCIIstrip(.)` entfernt anschließend **alle** Punkte aus der C-Zeichenfolge (`4026`), bevor sie angehängt wird.
+
+**Ergebnis: `19.20.14.4026`**, entsprechend der beobachteten Anzeige in der Growatt-App.
+
+`HB` bedeutet High-Byte (Bits 15–8), `LB` Low-Byte (Bits 7–0). Die Kombination ist eine **Formatierung bereits gelesener Werte**, kein neuer BLE-Befehl. `ASCIIstrip(.)` bezeichnet hier trotz des Namens ein Entfernen sämtlicher Punkte (`replace`), nicht nur ein Entfernen am Anfang und Ende.
+
+### Layoutbefehle
+
+Standalone-Zeilen mit doppelten Sternchen steuern die Ausgabe:
+
+```text
+**[Batterie]**
+**LEER**
+**---**
+**===40===**
+**SPALTE**
+**[Datalogger]**
+```
+
+`**SPALTE**` bzw. `**SEITENUMBRUCH**` beginnt eine neue Anzeigespalte. Überschriften und Trennlinien benötigen keinen Registerzugriff.
+
+## 5. TUI: Bedienung
+
+| Taste | Funktion |
+|---|---|
+| `↑` / `↓` | vorherigen / nächsten Eintrag auswählen |
+| `←` / `→` | linke / rechte Spalte auswählen |
+| `Enter` | Details zum markierten Eintrag |
+| `R` | alle Register neu lesen |
+| `G` | Gerät wechseln |
+| `K` | Geräteverwaltung öffnen |
+| `N` | Datalogger-Neustart anstoßen (**aktiver Eingriff**) |
+| `Q` | beenden bzw. Dialog verlassen |
+
+Die TUI liest die Register über `noah_registers.py`, zeigt die Daten zweispaltig an und öffnet per Enter eine Detailansicht. Die optionale Datei `register_info.txt` ergänzt dort erläuternde Texte unter Abschnittsüberschriften wie `[I:120]`, `[H:254]` oder `[C:21]`.
+
+### Schreibfunktionen – Vorsicht
+
+Die TUI enthält experimentelle Funktionen zum Ändern einzelner Holding-Register, bestimmter ASCII-Config-Parameter sowie zum Bearbeiten der neun Timeslots (je fünf Holding-Register). Schreibvorgänge erfolgen über separate Growatt-/Modbus-Befehle; die Implementierung versucht anschließend, die tatsächlichen Werte zurückzulesen. Ein Timeout beweist **nicht**, dass ein Schreibvorgang wirkungslos geblieben ist.
+
+Die kombinierte Firmwarezeile `I,C` ist **nur lesbar**. Niemals ungetestete Schreibwerte an Geräte senden; Änderungen an Betriebsart, Leistung, Zeitplänen oder Kommunikation können den Betrieb unmittelbar beeinflussen.
+
+## 6. CLI-Optionen
+
+```bash
+python noah_registers.py --help
+python noah_registers.py scan --help
+python noah_registers.py read --help
+python noah_registers.py list --help
+python noah_tui.py --help
+```
+
+Für `list` stehen unter anderem `--timeout`, `--block-size` (Standard 16), `--max-gap` (Standard 2) und `--verbose` zur Verfügung. Der frühere Schalter `list --type` ist aus Kompatibilitätsgründen noch vorhanden; maßgeblich sind die Registertypen in der Datei.
+
+## 7. Fehlersuche
+
+**`ModuleNotFoundError: noah_registers`** – die Versionsdatei muss als `noah_registers.py` neben `noah_tui.py` liegen.
+
+**`ModuleNotFoundError: textual` / `bleak`** – virtuelle Umgebung aktivieren und Abhängigkeiten installieren.
+
+**Keine BLE-Geräte gefunden** – Bluetooth-Adapter, Berechtigungen, Reichweite und mögliche parallele Verbindungen prüfen. Ein nicht gefundenes Gerät ist nicht zwangsläufig defekt.
+
+**Einzelregister liefert keine Werte** – nicht automatisch als „Register existiert nicht“ interpretieren. Einige NOAH-Register antworten nur in geeigneten Blockabfragen; die optimierten 16er-Fenster sind deshalb wichtig.
+
+**Firmware-Kombination wird abgelehnt** – prüfen, ob die Zeile exakt `119-120,21|Firmware|CombLBHBLB+ASCIIstrip(.)|.|I,C` lautet und beide Programme in der genannten Version vorliegen.
+
+**Anzeige teilweise unvollständig** – bei einer Kombination müssen alle benötigten Quellen erfolgreich gelesen werden. Ein fehlender C-Parameter darf nicht stillschweigend als gültige Firmwareversion ausgegeben werden.
+
+## 8. Projektstand und Grenzen
+
+Die BLE-Registerabfrage einschließlich der optimierten Input-Lesefenster wurde zuvor an **vier NOAH-Geräten** erfolgreich eingesetzt. Die Erweiterung für gemischte Register-/Config-Werte in `noah_registers.py` v0.6.22 und `noah_tui.py` v0.8.7 ist neuer und benötigt weiterhin einen vollständigen Praxistest an den Geräten. Die beobachtete Übereinstimmung der Firmwarebestandteile mit der App ist stark, ersetzt aber keine offizielle Registerdokumentation für den NOAH.
+
+Die SOH-Anzeige I:102 ist ebenfalls mit Vorsicht zu interpretieren: Für BMS-Version 14 beschreibt die verwandte NEXA-Dokumentation einen konstanten Wert von 100; ob und in welchem Umfang dies beim NOAH identisch umgesetzt ist, sollte separat verifiziert werden.
+
+## 9. Herkunft und Haftungshinweis
+
+Die BLE-Protokollbasis (`protocol.py`, `growatt_ble.py`) baut auf dem Community-Projekt **meiser79/growatt_noah_ble** auf. Bei einer Veröffentlichung sind dessen Lizenz- und Urheberrechtshinweise zu beachten.
+
+**Keine Verbindung zu Growatt; keine Garantie für Richtigkeit oder Betriebssicherheit.** Lesezugriffe sind für die Diagnose gedacht. Schreib- und Neustartfunktionen ausschließlich bewusst und auf eigene Verantwortung einsetzen.
