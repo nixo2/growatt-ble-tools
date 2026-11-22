@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""NOAH BLE TUI v0.8.0: guarded C ASCII and all H register writes plus datalogger restart.
+"""NOAH BLE TUI v0.8.7: cached timeslot editor, keyboard navigation and direct selection.
 
 Requires textual, bleak, and the unchanged noah_registers.py,
 protocol.py, growatt_ble.py and registers.txt in the same directory.
@@ -10,6 +10,7 @@ import contextlib
 import io
 import json
 import re
+import struct
 import sys
 from pathlib import Path
 
@@ -25,18 +26,46 @@ import noah_registers as core
 
 BASE = Path(__file__).resolve().parent
 DEVICE_FILE = BASE / 'noah_devices.txt'
+SLOT_BASE = 254
+SLOT_COUNT = 9
+SLOT_FIELDS = 5
+SLOT_MARKER = '__timeslot_selector__'
+INFO_FILE = BASE / 'register_info.txt'
+
+
+def load_register_info(path=INFO_FILE):
+    """Read plain-text sections [I:2], [H:256], [C:10] (UTF-8)."""
+    result = {}
+    current = None
+    if not path.is_file():
+        return result
+    for line in path.read_text(encoding='utf-8-sig').splitlines():
+        header = re.fullmatch(r'\s*\[([IHCihc]):(\d+)\]\s*', line)
+        if header:
+            current = (header.group(1).upper(), int(header.group(2)))
+            result[current] = []
+        elif current is not None:
+            result[current].append(line)
+    return {key: '\n'.join(lines).strip() for key, lines in result.items()}
+
 
 
 def factor_description(formula):
     if isinstance(formula, str):
         return formula
     if isinstance(formula, tuple):
+        if formula[0] == 'COMB_ASCII':
+            return 'Byte-Kombination ' + ''.join(formula[1]) + ' + ASCII ohne ' + repr(formula[2])
+        if formula[0] == 'COMB':
+            return 'Byte-Kombination ' + ''.join(formula[1])
         return f'Bitmaske {formula[1]}–{formula[2]}'
     return 'Numerischer 16-Bit-Wert (mit Umrechnung)' if callable(formula) else 'Numerischer 16-Bit-Wert'
 
 
 def classify(entry):
     regs, label, formula, unit, typ = entry
+    if typ in ('I,C', 'H,C'):
+        return 'Kombinierte Modbus-Bytes und ASCII-Config', 'Modbus 0x17 plus Growatt Config 0x19; nur lesende Gesamtansicht'
     if typ == 'C':
         return 'ASCII-Zeichenfolge (Growatt-Konfigurationsparameter)', 'ASCII-Bytes; keine 16-Bit-Modbus-Zahl'
     if formula == 'ASCII':
@@ -107,24 +136,92 @@ def collect_columns(output, layout_entries):
     return columns, selectable
 
 
+def navigate_buttons(screen, event):
+    """Arrow-key focus movement in dialogs; do not intercept editable inputs."""
+    if isinstance(screen.focused, Input):
+        return False
+    if event.key in ('up', 'left'):
+        screen.focus_previous()
+    elif event.key in ('down', 'right'):
+        screen.focus_next()
+    else:
+        return False
+    event.stop()
+    event.prevent_default()
+    return True
+
+
+class TimeslotSelect(ModalScreen):
+    """Select one of the nine fixed five-register scheduling slots."""
+    BINDINGS = [Binding('escape', 'cancel', 'Zurück'), Binding('q', 'cancel', 'Zurück')]
+    CSS = """
+    TimeslotSelect { align: center middle; background: $background 70%; }
+    #slotbox { width: 52; max-width: 95%; height: auto; border: round $accent;
+               background: $panel; padding: 1 2; }
+    #slotbox Button { margin: 0 1 1 0; }
+    """
+
+    def __init__(self, current):
+        super().__init__()
+        self.current = current
+
+    def compose(self):
+        with Vertical(id='slotbox'):
+            yield Label(f'Timeslot wählen (aktuell {self.current}/9)')
+            for slot in range(1, SLOT_COUNT + 1):
+                yield Button(f'Slot {slot}  (Register {SLOT_BASE + (slot-1)*5}–{SLOT_BASE + (slot-1)*5 + 4})',
+                             id=f'slot_{slot}', variant='primary' if slot == self.current else 'default')
+            yield Button('Abbrechen', id='cancel')
+
+    def on_mount(self):
+        self.query_one(f'#slot_{self.current}', Button).focus()
+
+    def on_button_pressed(self, event: Button.Pressed):
+        if event.button.id == 'cancel':
+            self.dismiss(None)
+        elif (event.button.id or '').startswith('slot_'):
+            self.dismiss(int(event.button.id.split('_')[1]))
+
+    def on_key(self, event):
+        if event.key in '123456789' and len(event.key) == 1:
+            self.dismiss(int(event.key))
+            event.stop()
+            event.prevent_default()
+        else:
+            navigate_buttons(self, event)
+
+    def action_cancel(self):
+        self.dismiss(None)
+
+
 class RegisterDetails(ModalScreen):
-    BINDINGS = [Binding('w', 'write', 'Schreiben'), Binding('g', 'device_select', 'Gerät'), Binding('k', 'device_config', 'Konfiguration'), Binding('q', 'dismiss', 'Zurück'), Binding('escape', 'dismiss', 'Zurück')]
+    BINDINGS = [Binding('w', 'write', 'Schreiben', show=False), Binding('g', 'device_select', 'Gerät'), Binding('k', 'device_config', 'Konfiguration'), Binding('q', 'dismiss', 'Zurück'), Binding('escape', 'dismiss', 'Zurück')]
     CSS = '''
     RegisterDetails { align: center middle; background: $background 70%; }
-    #detail { width: 76; max-width: 95%; height: auto; max-height: 90%;
-              border: round $accent; padding: 1 2; background: $panel; }
+    #detail { width: 88; max-width: 95%; height: auto; max-height: 90%;
+              border: round $accent; padding: 1 2; background: $panel; overflow-y: auto; }
     '''
 
-    def __init__(self, entry, display_line):
+    def __init__(self, entry, display_line, register_info=None):
         super().__init__()
         self.entry = entry
         self.display_line = display_line
+        self.register_info = register_info or {}
 
     def compose(self) -> ComposeResult:
         regs, label, formula, unit, typ = self.entry
         dtype, wire = classify(self.entry)
         register_list = ', '.join(map(str, regs))
-        access = 'Nur Lesen' if typ == 'I' else 'Lesen / Schreiben (Einzelregister aus Gruppe)' if typ == 'H' and len(regs) > 1 else 'Lesen / Schreiben'
+        access = 'Nur Lesen' if typ in ('I', 'I,C', 'H,C') else 'Lesen / Schreiben (Einzelregister aus Gruppe)' if typ == 'H' and len(regs) > 1 else 'Lesen / Schreiben'
+        sections = []
+        for idx, reg in enumerate(regs):
+            reg_type = (typ.split(',')[0] if idx < len(regs) - 1 else 'C') if ',' in typ else typ
+            note = self.register_info.get((reg_type, reg), '')
+            if note:
+                sections.append(f'[bold]Register {reg}:[/bold]\n{escape(note)}')
+        notes = ('\n\n[bold]Zusätzliche Registerinformationen:[/bold]\n\n'
+                 + '\n\n'.join(sections)) if sections else ''
+        write_hint = 'W: Schreibdialog öffnen\n' if typ in ('C', 'H') else ''
         content = (
             f'[bold]Registerdetails[/bold]\n\n'
             f'Bezeichnung:    {escape(label)}\n'
@@ -134,12 +231,19 @@ class RegisterDetails(ModalScreen):
             f'Übertragung:    {wire}\n'
             f'Interpretation: {factor_description(formula)}\n'
             f'Einheit/Legende: {escape(unit or "–")}\n\n'
-            f'[bold]Aktuelle Anzeige:[/bold]\n{self.display_line.strip()}\n\n'
-            f'[dim]W: Schreibdialog öffnen (C/H); I nur lesbar.\n'
+            f'[bold]Aktuelle Anzeige:[/bold]\n{escape(self.display_line.strip())}'
+            f'{notes}\n\n'
+            f'[dim]{write_hint}'
             f'G: anderes Gerät  K: Geräteverwaltung\n'
             f'q oder Esc: zurück zur Übersicht[/dim]'
         )
-        yield Static(content, id='detail', markup=True)
+        with VerticalScroll(id='detail'):
+            yield Static(content, markup=True)
+
+    def check_action(self, action, parameters):
+        if action == 'write' and self.entry[4] in ('I', 'I,C', 'H,C'):
+            return False
+        return True
 
     def action_device_select(self):
         self.dismiss()
@@ -152,7 +256,7 @@ class RegisterDetails(ModalScreen):
     def action_write(self):
         # Detailfenster schließen, dann den bereits bewährten Schreibdialog starten.
         # Die zentrale action_write() prüft Typ und Datenformat.
-        if self.entry[4] == 'I':
+        if self.entry[4] in ('I', 'I,C', 'H,C'):
             self.notify('Input-Register sind nur lesbar.', severity='warning')
             return
         self.dismiss()
@@ -278,6 +382,254 @@ class WriteConfig(ModalScreen):
             self.query_one('#cancel', Button).disabled = False
             self.query_one('#cancel', Button).label = 'Schließen'
 
+
+def modbus_write_multiple_frame(start, values):
+    """Experimental Modbus RTU FC16 (0x10) inside Growatt BLE 0x17."""
+    import protocol as proto
+    if not values or len(values) > 123:
+        raise ValueError('Ungültige Registeranzahl für FC16')
+    if not 0 <= start <= 65535 or start + len(values) > 65536:
+        raise ValueError('Registeradresse außerhalb 16 Bit')
+    if any(not isinstance(v, int) or not 0 <= v <= 65535 for v in values):
+        raise ValueError('Ungültiger 16-Bit-Registerwert')
+    request = struct.pack('>BBHHB', 1, 0x10, start, len(values), 2 * len(values))
+    request += struct.pack('>' + 'H' * len(values), *values)
+    request += struct.pack('<H', proto.crc16_modbus(request))
+    return proto.build_frame(proto.FUNC_PASSTHROUGH,
+                             proto.APP_SERIAL + struct.pack('>H', len(request)) + request)
+
+
+def decode_write_multiple_ack(data, start, count):
+    """Check FC16 RTU response: unit, function, start, quantity, CRC."""
+    import protocol as proto
+    if len(data) < 10:
+        return 'unknown', 'Growatt-Antwort ohne vollständige Seriennummer'
+    body = data[10:]
+    if len(body) >= 2 and int.from_bytes(body[:2], 'big') == len(body) - 2:
+        body = body[2:]
+    if len(body) < 5 or body[0] != 1:
+        return 'unknown', 'Keine gültige RTU-Antwort: ' + body.hex(' ')
+    if proto.crc16_modbus(body[:-2]) != int.from_bytes(body[-2:], 'little'):
+        return 'unknown', 'RTU-CRC ungültig: ' + body.hex(' ')
+    if body[1] == 0x90 and len(body) == 5:
+        return 'error', f'Modbus-Ausnahme 0x{body[2]:02X}'
+    if body[1] != 0x10 or len(body) != 8:
+        return 'unknown', 'Unerwartete FC16-Antwort: ' + body.hex(' ')
+    ack_start, ack_count = struct.unpack('>HH', body[2:6])
+    if (ack_start, ack_count) != (start, count):
+        return 'unknown', f'Antwort meldet Start {ack_start}, Anzahl {ack_count}'
+    return 'ok', f'FC16 bestätigt Start {start}, Anzahl {count} (CRC OK)'
+
+
+async def read_timeslot_block(noah, base):
+    """Read five contiguous holding registers with one FC03 request."""
+    import protocol as proto
+    reply = await core.receive_reply(noah, core.modbus_read_frame(3, base, SLOT_FIELDS),
+                                     12, False, expected_func=proto.FUNC_PASSTHROUGH)
+    if len(reply) < 10:
+        raise ValueError('FC03-Antwort zu kurz')
+    state, words = core.decode_modbus(reply[10:], 3, SLOT_FIELDS)
+    if words is None:
+        raise ValueError(f'FC03-Rücklesen fehlgeschlagen: {state}')
+    return list(words)
+
+
+class SlotLoading(ModalScreen):
+    """Non-interactive progress overlay during a BLE timeslot read."""
+    CSS = """
+    SlotLoading { align: center middle; background: $background 55%; }
+    #slotloadingbox { width: 43; height: 5; border: round $accent;
+                      background: $panel; content-align: center middle; }
+    """
+
+    def __init__(self, slot):
+        super().__init__()
+        self.slot = slot
+
+    def compose(self):
+        yield Static(f'Timeslot {self.slot}/9 wird gelesen ...', id='slotloadingbox')
+
+
+class WriteTimeslot(ModalScreen):
+    """Edit five slot registers; experimental single FC16 write and FC03 verification."""
+    BINDINGS = [Binding('escape', 'close', 'Zurück'), Binding('q', 'close', 'Zurück')]
+    CSS = """
+    WriteTimeslot { align: center middle; background: $background 75%; }
+    #slotedit { width: 86; max-width: 95%; height: auto; max-height: 94%;
+                overflow-y: auto; border: round $warning; background: $panel; padding: 1 2; }
+    #slotedit Input { margin: 0 0 1 0; }
+    #slotedit Button { margin: 1 1 0 0; }
+    #slotstatus { height: auto; min-height: 3; }
+    """
+    LABELS = ('Startzeit (HH:MM)', 'Endzeit (HH:MM)',
+              'Betriebsart (0=Load First, 1=Battery First, 2=Smart Self-Use)',
+              'Ausgangsleistung (W)', 'Aktiviert (0=Aus, 1=Ein)')
+
+    def __init__(self, address, slot, initial_values=None):
+        super().__init__()
+        self.address = address
+        self.slot = slot
+        self.base = SLOT_BASE + (slot - 1) * SLOT_FIELDS
+        self.current = None
+        self.readback = None
+        self.running = False
+        self.pending = None
+        self.initial_values = list(initial_values) if initial_values is not None else None
+
+    def compose(self):
+        with VerticalScroll(id='slotedit'):
+            yield Label(f'Timeslot {self.slot}/9 bearbeiten – Holding-Register {self.base}–{self.base + 4}')
+            yield Label('Alle fünf Werte werden gemeinsam per FC16 geschrieben und per FC03 kontrolliert.')
+            for i, label in enumerate(self.LABELS):
+                yield Label(label)
+                yield Input(placeholder='Wert wird übernommen ...', id=f'slotvalue_{i}', disabled=True)
+            yield Static('Übernehme Werte aus der Registerübersicht ...', id='slotstatus')
+            with Horizontal():
+                yield Button('Schreiben', id='slotwrite', variant='primary', disabled=True)
+                yield Button('Timeslot löschen', id='slotdelete', variant='error', disabled=True)
+                yield Button('Abbrechen', id='slotcancel')
+
+    async def on_mount(self):
+        if self.initial_values is not None and len(self.initial_values) == SLOT_FIELDS:
+            self.set_fields(self.initial_values)
+            self.query_one('#slotstatus', Static).update(
+                'Werte aus der Tabelle übernommen. Änderungen eingeben und Schreiben wählen.')
+        else:
+            # Only if table values cannot be reconstructed safely.
+            await self.load_values()
+
+    def set_fields(self, values):
+        self.current = list(values)
+        for i, value in enumerate(values):
+            field = self.query_one(f'#slotvalue_{i}', Input)
+            field.value = self.format_time(value) if i < 2 else str(value)
+            field.disabled = False
+        self.query_one('#slotwrite', Button).disabled = False
+        self.query_one('#slotdelete', Button).disabled = False
+
+    @staticmethod
+    def format_time(raw):
+        return f'{raw >> 8:02d}:{raw & 255:02d}'
+
+    async def load_values(self):
+        self.running = True
+        loading = SlotLoading(self.slot)
+        self.app.push_screen(loading)
+        await asyncio.sleep(0.05)  # Let Textual paint the progress dialog before BLE starts.
+        try:
+            async with core.NoahBle(self.address) as noah:
+                values = await read_timeslot_block(noah, self.base)
+            self.set_fields(values)
+            self.query_one('#slotstatus', Static).update('Werte geladen. Änderungen eingeben und Schreiben wählen.')
+        except Exception as exc:
+            self.query_one('#slotstatus', Static).update(f'BLE-Lesen fehlgeschlagen: {exc}. Keine Schreibfunktion freigegeben.')
+        finally:
+            loading.dismiss()
+            self.running = False
+
+    def parse_fields(self):
+        values = []
+        for i in range(SLOT_FIELDS):
+            value = self.query_one(f'#slotvalue_{i}', Input).value.strip()
+            if i < 2:
+                match = re.fullmatch(r'(\d{1,2}):(\d{2})', value)
+                if not match:
+                    raise ValueError(f'{self.LABELS[i]}: Uhrzeit im Format HH:MM erforderlich.')
+                h, minute = map(int, match.groups())
+                if h > 23 or minute > 59:
+                    raise ValueError(f'{self.LABELS[i]}: Uhrzeit außerhalb 00:00–23:59.')
+                values.append((h << 8) | minute)
+            else:
+                if not re.fullmatch(r'\d+', value):
+                    raise ValueError(f'{self.LABELS[i]}: positive ganze Zahl erforderlich.')
+                raw = int(value)
+                if raw > 65535:
+                    raise ValueError(f'{self.LABELS[i]}: maximal 65535.')
+                if i == 2 and raw not in (0, 1, 2):
+                    raise ValueError('Betriebsart muss 0, 1 oder 2 sein.')
+                if i == 4 and raw not in (0, 1):
+                    raise ValueError('Aktiviert muss 0 oder 1 sein.')
+                values.append(raw)
+        return values
+
+    def on_button_pressed(self, event: Button.Pressed):
+        name = event.button.id
+        if name == 'slotcancel':
+            self.action_close()
+        elif name == 'slotwrite' and not self.running:
+            try:
+                target = self.parse_fields()
+            except ValueError as exc:
+                self.query_one('#slotstatus', Static).update(f'Eingabefehler: {exc}')
+                return
+            asyncio.create_task(self.perform_write(target))
+        elif name == 'slotdelete' and not self.running:
+            # Explicitly requested: delete writes five zeros without an extra confirmation.
+            asyncio.create_task(self.perform_write([0] * SLOT_FIELDS))
+
+    async def perform_write(self, target):
+        self.running = True
+        for button in self.query(Button):
+            button.disabled = True
+        for field in self.query(Input):
+            field.disabled = True
+        status = self.query_one('#slotstatus', Static)
+        import protocol as proto
+        ack_state = 'unknown'
+        ack_detail = 'Keine FC16-Antwort erhalten'
+        actual = None
+        try:
+            async with core.NoahBle(self.address) as noah:
+                status.update(f'Sende FC16: Timeslot {self.slot}, Register {self.base}–{self.base + 4} ...')
+                try:
+                    reply = await core.receive_reply(
+                        noah, modbus_write_multiple_frame(self.base, target), 12, False,
+                        expected_func=proto.FUNC_PASSTHROUGH)
+                    ack_state, ack_detail = decode_write_multiple_ack(reply, self.base, SLOT_FIELDS)
+                except Exception as exc:
+                    ack_detail = f'FC16-Anfrage/Antwort fehlgeschlagen: {exc}'
+                # Read back even on timeout or exception: write may have been applied.
+                status.update(f'{ack_detail}\nLese fünf Register gemeinsam per FC03 zurück ...')
+                try:
+                    actual = await read_timeslot_block(noah, self.base)
+                except Exception as exc:
+                    status.update(f'{ack_detail}\nFC03-Rücklesen fehlgeschlagen: {exc}\n'
+                                  'Schreibwirkung UNBEKANNT. Kein automatischer FC06-Fallback.')
+            if actual is not None:
+                self.readback = (self.slot, actual)
+                # After deleting or saving, show the actual verified state in
+                # the editor itself, not stale pre-write field contents.
+                self.set_fields(actual)
+                differences = [str(self.base + i) for i, value in enumerate(actual)
+                               if value != target[i]]
+                if differences:
+                    status.update(f'FC16-Antwort [{ack_state}]: {ack_detail}\n'
+                                  f'Rücklesewerte abweichend bei Register(n): {", ".join(differences)}.\n'
+                                  'Tabelle wird mit den tatsächlichen Werten aktualisiert.')
+                else:
+                    note = ('FC16-Antwort gültig.' if ack_state == 'ok' else
+                            'FC16-Antwort nicht bestätigt; Werte stimmen beim Rücklesen.')
+                    status.update(f'{note}\nAlle fünf Werte per FC03 verifiziert.\n'
+                                  'Schließen aktualisiert die Tabelle.')
+        except Exception as exc:
+            status.update(f'BLE-Fehler: {exc}. Schreibwirkung unklar; Timeslot erneut lesen.')
+        finally:
+            self.running = False
+            self.query_one('#slotcancel', Button).disabled = False
+            self.query_one('#slotcancel', Button).label = 'Schließen'
+            if actual is not None:
+                for field in self.query(Input):
+                    field.disabled = False
+                self.query_one('#slotwrite', Button).disabled = False
+                self.query_one('#slotdelete', Button).disabled = False
+
+    def on_key(self, event):
+        navigate_buttons(self, event)
+
+    def action_close(self):
+        if not self.running:
+            self.dismiss(self.readback)
+
 class WriteHolding(ModalScreen):
     """Confirmed FC06 write to ONE Holding register, with read-before/write/read-back."""
     BINDINGS = [Binding('escape', 'cancel', 'Abbrechen'), Binding('q', 'cancel', 'Abbrechen')]
@@ -316,6 +668,9 @@ class WriteHolding(ModalScreen):
             with Horizontal():
                 yield Button('Prüfen', id='hcheck', variant='primary')
                 yield Button('Abbrechen', id='hcancel')
+
+    def on_key(self, event):
+        navigate_buttons(self, event)
 
     def action_cancel(self):
         if not self.running:
@@ -462,6 +817,9 @@ class RestartDatalogger(ModalScreen):
                 yield Button('JA, neu starten', id='restart_confirm', variant='error')
                 yield Button('Abbrechen', id='restart_cancel')
 
+    def on_key(self, event):
+        navigate_buttons(self, event)
+
     def action_cancel(self):
         if not self.running:
             self.dismiss(False)
@@ -541,6 +899,7 @@ class NoahTUI(App):
         self.address = address
         self.file = file
         self.layout_entries = core.load_registers(file)
+        self.register_info = load_register_info()
         self.columns = []
         self.rows = []
         self.column = 0
@@ -548,6 +907,9 @@ class NoahTUI(App):
         self.busy = False
         self.reload_requested = False
         self.next_menu = None
+        self.timeslot = 1
+        self.slot_row_indices = []
+        self.slot_values = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -571,7 +933,10 @@ class NoahTUI(App):
             await self.load_data()
 
     def apply_output(self, output):
+        self.timeslot = 1
         self.columns, self.rows = collect_columns(output, self.layout_entries)
+        self._prepare_timeslot_rows()
+        self.slot_values = self._slot_values_from_table()
         self.column = min(self.column, len(self.columns) - 1)
         for i, rows in enumerate(self.rows):
             self.cursors[i] = min(self.cursors[i], max(0, len(rows) - 1))
@@ -595,6 +960,133 @@ class NoahTUI(App):
             if not self.columns:
                 self.query_one('#table0', Static).update(f'Fehler beim Auslesen: {exc}')
         finally:
+            self.busy = False
+
+    def _prepare_timeslot_rows(self):
+        """Make the section header selectable without changing the register file."""
+        self.slot_row_indices = []
+        if len(self.columns) < 2 or len(self.rows) < 2:
+            return
+        lines = self.columns[1]
+        for idx, line in enumerate(lines):
+            if re.search(r'\bTimeslot\s*:\s*\d+\s+von\s+9\b', line, re.I):
+                self.slot_heading_index = idx
+                self._set_slot_heading()
+                self.rows[1].append((idx, ((), SLOT_MARKER, None, '', 'S')))
+                self.rows[1].sort(key=lambda item: item[0])
+                break
+        for row_idx, (_, entry) in enumerate(self.rows[1]):
+            if entry[4] == 'H' and len(entry[0]) == 1 and SLOT_BASE <= entry[0][0] < SLOT_BASE + SLOT_FIELDS:
+                self.slot_row_indices.append(row_idx)
+        if len(self.slot_row_indices) != SLOT_FIELDS:
+            self.slot_row_indices = []
+
+    def _set_slot_heading(self):
+        idx = getattr(self, 'slot_heading_index', None)
+        if idx is not None:
+            self.columns[1][idx] = f'Timeslot: {self.timeslot} von 9     [Enter: Auswahl]'
+
+    def _format_row(self, col, idx, entry, value, shown_unit):
+        """Match the fixed-width layout of the original register renderer."""
+        regs, label, _, _, _ = entry
+        header = self.columns[col][0]
+        label_start = header.find('Bezeichnung')
+        unit_start = header.find('Einheit')
+        status_start = header.find('Status', unit_start)
+        if min(label_start, unit_start, status_start) < 0:
+            raise ValueError('Tabellenspalten nicht erkannt')
+        reg_width = label_start - 2
+        label_width = max(11, *(len(item[1][1]) for item in self.rows[col] if item[1][4] != 'S'))
+        value_start = label_start + label_width + 2
+        value_width = unit_start - 2 - value_start
+        unit_width = status_start - 2 - unit_start
+        if min(reg_width, value_width, unit_width) < 1:
+            raise ValueError('Ungültige Spaltenbreiten')
+        reg_text = str(regs[0]) if len(regs) == 1 else ','.join(map(str, regs))
+        return (f'{reg_text:>{reg_width}}  {label:<{label_width}}  '
+                f'{str(value):>{value_width}}  {shown_unit:<{unit_width}}  [OK]')
+
+    def _slot_values_from_table(self):
+        """Decode the five visible values, without extra BLE traffic.
+
+        The source of truth is the displayed table (initial FC03 reading or
+        verified FC03 readback after slot change/write). If parsing is unsafe,
+        the editor falls back to its existing single FC03 block read.
+        """
+        if len(self.slot_row_indices) != SLOT_FIELDS:
+            return None
+        try:
+            header = self.columns[1][0]
+            label_start = header.find('Bezeichnung')
+            unit_start = header.find('Einheit')
+            label_width = max(11, *(len(item[1][1]) for item in self.rows[1]
+                                    if item[1][4] != 'S'))
+            value_start = label_start + label_width + 2
+            values = []
+            for offset, row_idx in enumerate(self.slot_row_indices):
+                line_idx, entry = self.rows[1][row_idx]
+                line = self.columns[1][line_idx]
+                field = line[value_start:unit_start].strip()
+                if offset < 2:
+                    match = re.search(r'(\d{1,2}):(\d{2})', field)
+                    if not match:
+                        return None
+                    hour, minute = map(int, match.groups())
+                    if hour > 23 or minute > 59:
+                        return None
+                    values.append((hour << 8) | minute)
+                else:
+                    match = re.match(r'(\d+)\b', field)
+                    if not match:
+                        return None
+                    values.append(int(match.group(1)))
+            return values
+        except (ValueError, IndexError, AttributeError):
+            return None
+
+    def select_timeslot(self, slot):
+        if slot is not None and slot != self.timeslot:
+            asyncio.create_task(self.load_timeslot(slot))
+
+    async def load_timeslot(self, slot):
+        if self.busy or not self.slot_row_indices or not 1 <= slot <= SLOT_COUNT:
+            return
+        self.busy = True
+        loading = SlotLoading(slot)
+        self.push_screen(loading)
+        await asyncio.sleep(0.05)  # Ensure the loading window is visible before BLE I/O.
+        self.query_one('#notice', Static).update(f'Lese Timeslot {slot}/9 (5 Holding-Register) ...')
+        try:
+            base = SLOT_BASE + (slot - 1) * SLOT_FIELDS
+            # Read all five first: never mix old/new slot values on a partial failure.
+            async with core.NoahBle(self.address) as noah:
+                values = [await core.read_one(noah, 3, base + offset, 12, False)
+                          for offset in range(SLOT_FIELDS)]
+            replacements = []
+            for offset, row_idx in enumerate(self.slot_row_indices):
+                line_idx, entry = self.rows[1][row_idx]
+                regs, label, formula, unit, typ = entry
+                new_entry = ((base + offset,), re.sub(r'(?i)\bslot\s*1\b', f'Slot{slot}', label),
+                             formula, unit, typ)
+                # Keep original descriptive suffix, replacing any existing slot prefix.
+                new_entry = (new_entry[0], re.sub(r'(?i)\bslot\s*\d+\b', f'Slot{slot}', label),
+                             formula, unit, typ)
+                shown, shown_unit = core.display_value([values[offset]], formula, unit)
+                replacements.append((row_idx, line_idx, new_entry, shown, shown_unit))
+            # Widths and all other columns remain stable; apply atomically.
+            for row_idx, line_idx, entry, shown, shown_unit in replacements:
+                self.rows[1][row_idx] = (line_idx, entry)
+            for row_idx, line_idx, entry, shown, shown_unit in replacements:
+                self.columns[1][line_idx] = self._format_row(1, row_idx, entry, shown, shown_unit)
+            self.timeslot = slot
+            self.slot_values = list(values)
+            self._set_slot_heading()
+            self.draw()
+            self.query_one('#notice', Static).update(f'Timeslot {slot}/9 gelesen | Enter: Details und Ändern')
+        except Exception as exc:
+            self.query_one('#notice', Static).update(f'Timeslot {slot} nicht geladen: {exc} | Bisheriger Slot bleibt aktiv')
+        finally:
+            loading.dismiss()
             self.busy = False
 
     def draw(self):
@@ -639,7 +1131,23 @@ class NoahTUI(App):
     def action_details(self):
         if self.rows and not self.busy and self.rows[self.column]:
             line, entry = self.rows[self.column][self.cursors[self.column]]
-            self.push_screen(RegisterDetails(entry, self.columns[self.column][line]))
+            if entry[4] == 'S':
+                self.push_screen(TimeslotSelect(self.timeslot), self.select_timeslot)
+            else:
+                self.push_screen(RegisterDetails(entry, self.columns[self.column][line], self.register_info))
+
+    def on_timeslot_written(self, result):
+        if result is not None:
+            slot, values = result
+            if slot == self.timeslot and len(values) == SLOT_FIELDS:
+                self.slot_values = list(values)
+                for offset, row_idx in enumerate(self.slot_row_indices):
+                    line_idx, entry = self.rows[1][row_idx]
+                    shown, shown_unit = core.display_value([values[offset]], entry[2], entry[3])
+                    self.columns[1][line_idx] = self._format_row(1, row_idx, entry, shown, shown_unit)
+                self.draw()
+                self.query_one('#notice', Static).update(
+                    f'Timeslot {slot}: fünf Rücklesewerte übernommen | Enter: Details und Ändern')
 
     def on_write_finished(self, result):
         """Use the verified BLE readback; never display the unverified target."""
@@ -713,8 +1221,18 @@ class NoahTUI(App):
             return
         line, entry = self.rows[self.column][self.cursors[self.column]]
         regs, label, formula, unit, typ = entry
+        if typ in ('I,C', 'H,C'):
+            self.query_one('#notice', Static).update('Kombinierte Registeranzeige ist schreibgeschützt.')
+            return
         if typ == 'H':
-            self.push_screen(WriteHolding(self.address, entry), self.on_write_finished)
+            if (self.slot_row_indices and self.column == 1 and
+                    self.cursors[1] in self.slot_row_indices):
+                self.push_screen(WriteTimeslot(self.address, self.timeslot,
+                                               self.slot_values if self.slot_values is not None
+                                               else self._slot_values_from_table()),
+                                 self.on_timeslot_written)
+            else:
+                self.push_screen(WriteHolding(self.address, entry), self.on_write_finished)
             return
         if typ != 'C' or len(regs) != 1 or formula != 'ASCII':
             self.query_one('#notice', Static).update(
@@ -853,6 +1371,18 @@ class DeviceMenu(App):
         finally:
             self.scanning = False
             self.query_one('#scan', Button).disabled = False
+
+    def on_key(self, event):
+        if (self.mode == 'select' and len(event.key) == 1 and
+                event.key in '123456789'):
+            idx = int(event.key) - 1
+            if idx < len(self.devices):
+                self.selected = self.devices[idx]['address']
+                self.exit()
+                event.stop()
+                event.prevent_default()
+                return
+        navigate_buttons(self, event)
 
     async def on_button_pressed(self, event: Button.Pressed):
         name = event.button.id or ''
