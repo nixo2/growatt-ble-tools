@@ -4,11 +4,19 @@ Register|Bezeichnung|Faktor|Einheit|Registertyp
 **Noah Daten**
 **---**
 21-28|Seriennummer|ASCII||I
+119-120,21|Firmware|CombLBHBLB+ASCIIstrip(.)|.|I,C
 12|Stapel|1|Stück|I
-15|Zellen Fehler|bit0-8|Zellen 1-9|I
-2,3,4|Fehler Intern, Netz, Output|1 NOHEX||I
+101|Zyklen|1||I
+102|SOH|1||I
 13|SOC Total|1|%|I
 29,41,53,65|SOC Bat.1-4|1|%|I
+**---**
+7|PV-Leistung-gesamt|1|W|I
+2|Ausgangsleistung|1|W|I
+11|Ladeleistung|*1 -30000|W|I
+**---**
+8|Modus|1|0 Load First, 1 Battery First, 2 Smart Self-Use|I
+10|Akku-Status|1|0 Idle, 1 Laden, 2 Entladen|I
 90|Ladegrenze|1|%|I
 91|Entladegrenze|1|%|I
 99|Zellspannung max.|*0.001|V|I
@@ -19,16 +27,22 @@ Register|Bezeichnung|Faktor|Einheit|Registertyp
 14|Heizung|bit0-3|Akku 1-4|I
 92,95|Spannung PV1-2|0.01|V|I
 93,96|Strom PV1-2|0.01|A|I
-7|PV-Leistung-gesamt|1|W|I
-8|Modus|1|0 Load First, 1 Battery First, 2 Smart Self-Use|I
-10|Akku-Status|1|0 Idle, 1 Laden, 2 Entladen|I
-11|Ladeleistung|*1 -30000|W|I
+109|Ausgangsspannung|0.01|V|I
+**---**
+72|PV-Energie heute|0.1|Kw/h|I
+74|PV-Energie Monat|0.1|Kw/h|I
+76|PV-Energie Jahr|0.1|Kw/h|I
+78|Abgegebene Energie|0.1|Kw/h|I
 **SEITENUMBRUCH**
 **Noah Einstellungen**
 **---**
 250|Ladegrenze|1|%|H
 251|Entladegrenze|1|%|H
 252|Standardausgangsleistung|1|W|H
+**LEER**
+**---**
+**Timeslot: 1 von 9     [Enter: Auswahl]**
+**---**
 254|Slot1 Startzeit|TIME|Uhr|H
 255|Slot1 Endzeit|TIME|Uhr|H
 256|Slot1 Betriebsart|1|0 Load First, 1 Battery First, 2 Smart Self-Use|H
@@ -45,15 +59,13 @@ Register|Bezeichnung|Faktor|Einheit|Registertyp
 **LEER**
 **---**
 **[UNBEKANNTE HOLDING-REGISTER]**
-
+**---**
+43|Unbekannt|1||H
 45,46,47,48,49,50|Gerätezeit?|1 NOHEX||H
 56-58|Kennung? ASCII|ASCII||H
 62-70|Kennung/Zeitstempel? ASCII|ASCII||H
-300|Status?|bit15-0||H
-43|Unbekannt|1||H
-
-#300|Unbekannt|1||H#
-#43|Unbekannt|1||H#
-#45-50|Unbekannt|1||H#
-#56-58|Unbekannt|1||H#
-#62-70|Unbekannt|1||H#
+300-304|Unbekannt|1 NOHEX||H
+**---**
+**[UNBEKANNTE INFO-REGISTER]**
+**---**
+19|Unbekannt|1||I

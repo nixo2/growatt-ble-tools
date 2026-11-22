@@ -1,0 +1,9 @@
+# Ergänzende Informationen für die NOAH BLE TUI
+
+[I:14]
+Akkuheizung (battery_heater_state), Bitmaske der aktiven Heizrelais.
+Bit 0 (0x0001): Heizung von Akkupack 1 aktiv
+Bit 1 (0x0002): Heizung von Akkupack 2 aktiv
+Bit 2 (0x0004): Heizung von Akkupack 3 aktiv
+Bit 3 (0x0008): Heizung von Akkupack 4 aktiv
+Ein gesetztes Bit bedeutet, dass die Heizung eines Akkus eingeschaltet ist
