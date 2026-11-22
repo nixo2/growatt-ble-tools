@@ -206,4 +206,4 @@ For register definitions, supported input/holding/configuration access, data con
 
 ---
 
-**Related documentation:** [NOAH BLE Register Reader & TUI (English)](README_NOAH_BLE_TUI_REGISTERS_EN.md)
+**Related documentation:** https://github.com/nixo2/growatt-noah-ble-watchdog/blob/main/register-reader/README.md
