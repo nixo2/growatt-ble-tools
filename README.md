@@ -169,7 +169,7 @@ python -m pip install textual rich
 python noah_tui.py
 ```
 
-For register definitions, supported input/holding/configuration access, data conversions, write limitations, and TUI operation, see **[BLE Register Diagnostics and Terminal Interface](README_NOAH_BLE_TUI_REGISTERS_EN.md)**. If you organize the project into subdirectories, adjust this relative link to the actual README location.
+For register definitions, supported input/holding/configuration access, data conversions, write limitations, and TUI operation, see **https://github.com/nixo2/growatt-noah-ble-watchdog/blob/main/register-reader/README.md**. If you organize the project into subdirectories, adjust this relative link to the actual README location.
 
 **Safety:** Do not edit unknown registers merely because they are visible in the TUI. Register write behavior is experimental and may affect battery or communication settings.
 
@@ -206,4 +206,4 @@ For register definitions, supported input/holding/configuration access, data con
 
 ---
 
-**Related documentation:** [NOAH BLE Register Reader & TUI (English)](README_NOAH_BLE_TUI_REGISTERS_EN.md)
+**Related documentation:** https://github.com/nixo2/growatt-noah-ble-watchdog/blob/main/register-reader/README.md
