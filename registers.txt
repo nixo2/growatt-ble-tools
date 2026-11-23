@@ -100,3 +100,27 @@ Register|Bezeichnung|Faktor|Einheit|Registertyp
 74|PV-Energie Monat
 76|PV-Energie Jahr
 78|Abgegebene Energie
+
+[F5]
+13|SOC Total
+29,41,53,65|SOC Bat.1-4
+8|Modus
+10|Akku-Status
+90|Ladegrenze
+91|Entladegrenze
+14|Heizung
+7|PV-Leistung-gesamt
+2|Ausgangsleistung
+11|Ladeleistung
+30,42,54,66|Temp. Bat.1-4
+94,97|Temp. PV1-2
+98|Temp. Noah
+99|Zellspannung max.
+100|Zellspannung min.
+92,95|Spannung PV1-2
+93,96|Strom PV1-2
+109|Ausgangsspannung
+72|PV-Energie heute
+74|PV-Energie Monat
+76|PV-Energie Jahr
+78|Abgegebene Energie
