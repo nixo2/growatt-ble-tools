@@ -1,7 +1,7 @@
 # NOAH BLE Registerliste (Input und Holding Registers)
 # Register|Bezeichnung|Faktor/Berechnung|Einheit|Registertyp
 Register|Bezeichnung|Faktor|Einheit|Registertyp
-**Noah Daten**
+**Noah Daten                      F1:Aktualisieren**
 **---**
 21-28|Seriennummer|ASCII||I
 119-120,21|Firmware|CombLBHBLB+ASCIIstrip(.)|.|I,C
@@ -9,30 +9,30 @@ Register|Bezeichnung|Faktor|Einheit|Registertyp
 101|Zyklen|1||I
 102|SOH|1||I
 13|SOC Total|1|%|I
-29,41,53,65|SOC Bat.1-4|1|%|I
+29,41,53,65|SOC Bat.1-4|1 NOHEX|%|I
+8|Modus|1|0 Load First, 1 Battery First, 2 Smart Self-Use|I
+10|Akku-Status|1|0 Idle, 1 Laden, 2 Entladen|I
+90|Ladegrenze|1|%|I
+91|Entladegrenze|1|%|I
+14|Heizung|bit0-3|Akku 1-4|I
 **---**
 7|PV-Leistung-gesamt|1|W|I
 2|Ausgangsleistung|1|W|I
 11|Ladeleistung|*1 -30000|W|I
 **---**
-8|Modus|1|0 Load First, 1 Battery First, 2 Smart Self-Use|I
-10|Akku-Status|1|0 Idle, 1 Laden, 2 Entladen|I
-90|Ladegrenze|1|%|I
-91|Entladegrenze|1|%|I
+30,42,54,66|Temp. Bat.1-4|*0.1 -273.1 NULL0 NOHEX|°C|I
+94,97|Temp. PV1-2|*0.1 -273.1 NULL0 NOHEX|°C|I
+98|Temp. Noah|*0.1 -273.1|°C|I
 99|Zellspannung max.|*0.001|V|I
 100|Zellspannung min.|*0.001|V|I
-30,42,54,66|Temp. Bat.1-4|*0.1 -273.1 NULL0|°C|I
-94,97|Temp. PV1-2|*0.1 -273.1 NULL0|°C|I
-98|Temp. Noah|*0.1 -273.1|°C|I
-14|Heizung|bit0-3|Akku 1-4|I
-92,95|Spannung PV1-2|0.01|V|I
-93,96|Strom PV1-2|0.01|A|I
+92,95|Spannung PV1-2|0.01 NOHEX|V|I
+93,96|Strom PV1-2|0.01 NOHEX|A|I
 109|Ausgangsspannung|0.01|V|I
 **---**
-72|PV-Energie heute|0.1|Kw/h|I
-74|PV-Energie Monat|0.1|Kw/h|I
-76|PV-Energie Jahr|0.1|Kw/h|I
-78|Abgegebene Energie|0.1|Kw/h|I
+72|PV-Energie heute|0.1|kWh|I
+74|PV-Energie Monat|0.1|kWh|I
+76|PV-Energie Jahr|0.1|kWh|I
+78|Abgegebene Energie|0.1|kWh|I
 **SEITENUMBRUCH**
 **Noah Einstellungen**
 **---**
@@ -69,3 +69,24 @@ Register|Bezeichnung|Faktor|Einheit|Registertyp
 **[UNBEKANNTE INFO-REGISTER]**
 **---**
 19|Unbekannt|1||I
+
+##Aktualisierung per F-Tasten##
+[F1]
+13|SOC Total
+29,41,53,65|SOC Bat.1-4
+7|PV-Leistung-gesamt
+2|Ausgangsleistung
+11|Ladeleistung
+8|Modus
+10|Akku-Status
+90|Ladegrenze
+91|Entladegrenze
+99|Zellspannung max.
+100|Zellspannung min.
+30,42,54,66|Temp. Bat.1-4
+94,97|Temp. PV1-2
+98|Temp. Noah
+14|Heizung
+92,95|Spannung PV1-2
+93,96|Strom PV1-2
+109|Ausgangsspannung

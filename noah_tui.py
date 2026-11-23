@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""NOAH BLE TUI v0.8.7: cached timeslot editor, keyboard navigation and direct selection.
+"""NOAH BLE TUI v0.8.13: cached timeslot editor, keyboard navigation and direct selection.
 
 Requires textual, bleak, and the unchanged noah_registers.py,
 protocol.py, growatt_ble.py and registers.txt in the same directory.
@@ -292,9 +292,9 @@ class WriteConfig(ModalScreen):
             yield Label(f'Aktueller Wert: {self.old_value!r}')
             yield Label('ACHTUNG: Experimenteller Schreibzugriff. Statusparameter können schreibgeschützt sein; Netzwerkverbindung kann abbrechen!')
             yield Input(value=self.old_value, placeholder='Neuer ASCII-Wert', id='new_value')
-            yield Static('Neuen Wert eingeben und „Prüfen“ wählen.', id='write_status')
+            yield Static('Neuen Wert eingeben und „Schreiben“ wählen.', id='write_status')
             with Horizontal():
-                yield Button('Prüfen', id='check', variant='primary')
+                yield Button('Schreiben', id='check', variant='primary')
                 yield Button('Abbrechen', id='cancel')
 
     def action_cancel(self):
@@ -331,14 +331,8 @@ class WriteConfig(ModalScreen):
         self.query_one('#write_status', Static).update(
             f'ALT: {self.old_value!r}\nNEU: {value!r}\n'
             f'ASCII-Bytes: {raw.hex(" ")}\n'
-            'Schreibzugriff auf Hardware! Mit „JA, schreiben“ ausdrücklich bestätigen.')
-        if not self.query('#confirm'):
-            # Textual widgets do not implement insert_after(); mount on the parent.
-            check_button = self.query_one('#check', Button)
-            check_button.parent.mount(
-                Button('JA, schreiben', id='confirm', variant='error'),
-                after=check_button,
-            )
+            'Schreibvorgang wird ausgeführt und anschließend rückgelesen.')
+        asyncio.create_task(self.perform_write())
 
     async def perform_write(self):
         if self.running or self.pending is None:
@@ -448,6 +442,22 @@ class SlotLoading(ModalScreen):
 
     def compose(self):
         yield Static(f'Timeslot {self.slot}/9 wird gelesen ...', id='slotloadingbox')
+
+
+class GroupLoading(ModalScreen):
+    """Short modal status during targeted F-key BLE refresh."""
+    CSS = """
+    GroupLoading { align: center middle; background: $background 55%; }
+    #grouploadingbox { width: 52; height: 5; border: round $accent;
+                       background: $panel; content-align: center middle; }
+    """
+
+    def __init__(self, message):
+        super().__init__()
+        self.message = message
+
+    def compose(self):
+        yield Static(self.message, id='grouploadingbox')
 
 
 class WriteTimeslot(ModalScreen):
@@ -631,7 +641,7 @@ class WriteTimeslot(ModalScreen):
             self.dismiss(self.readback)
 
 class WriteHolding(ModalScreen):
-    """Confirmed FC06 write to ONE Holding register, with read-before/write/read-back."""
+    """FC06 single-register editor: cached prefill, read-before-write and readback."""
     BINDINGS = [Binding('escape', 'cancel', 'Abbrechen'), Binding('q', 'cancel', 'Abbrechen')]
     CSS = """
     WriteHolding { align: center middle; background: $background 75%; }
@@ -642,10 +652,11 @@ class WriteHolding(ModalScreen):
     #hstatus { height: auto; min-height: 3; }
     """
 
-    def __init__(self, address, entry):
+    def __init__(self, address, entry, initial_value=None):
         super().__init__()
         self.address = address
         self.entry = entry
+        self.initial_value = initial_value
         self.pending = None
         self.current = None
         self.running = False
@@ -662,12 +673,21 @@ class WriteHolding(ModalScreen):
                 yield Input(value=str(regs[0]), placeholder='Registeradresse aus der Gruppe', id='hreg')
             yield Label(f'Format: {"HH:MM (TIME)" if formula == "TIME" and len(regs) == 1 else "16-Bit-Rohwert (0–65535), auch bei ASCII-Gruppen"}')
             yield Label('Experimenteller FC06-Schreibzugriff! Gerätefunktionen können sich sofort ändern.')
-            yield Label('Der aktuelle Rohwert wird vor dem Schreiben erneut ausgelesen.')
-            yield Input(placeholder='HH:MM' if formula == 'TIME' else 'Dezimalzahl oder 0x...', id='hvalue')
-            yield Static('Neuen Wert eingeben und „Prüfen“ wählen.', id='hstatus')
+            yield Label('Schreiben ohne Vorab-Lesen; anschließend wird der Wert per FC03 verifiziert.')
+            yield Input(value=self.initial_value or '', placeholder='HH:MM' if formula == 'TIME' else 'Dezimalzahl oder 0x...', id='hvalue')
+            yield Static('Neuen Wert eingeben und „Schreiben“ wählen.', id='hstatus')
             with Horizontal():
-                yield Button('Prüfen', id='hcheck', variant='primary')
+                yield Button('Schreiben', id='hcheck', variant='primary')
                 yield Button('Abbrechen', id='hcancel')
+
+    async def on_mount(self):
+        # Prefill exclusively from the existing table; never initiate BLE I/O
+        # merely because the editor was opened.
+        status = self.query_one('#hstatus', Static)
+        if self.initial_value is not None:
+            status.update('Wert aus der Tabelle übernommen. Ändern und Schreiben wählen.')
+        else:
+            status.update('Kein eindeutiger Tabellenwert verfügbar. Wert manuell eingeben.')
 
     def on_key(self, event):
         navigate_buttons(self, event)
@@ -724,34 +744,22 @@ class WriteHolding(ModalScreen):
         except ValueError as exc:
             status.update(f'Eingabefehler: {exc}')
             return
-        self.running = True
-        self.query_one('#hcheck', Button).disabled = True
-        status.update('Lese aktuellen Rohwert über BLE FC03 ...')
-        try:
-            async with core.NoahBle(self.address) as noah:
-                old = await core.read_one(noah, 3, self.selected_register, 12, False)
-        except Exception as exc:
-            status.update(f'Vorab-Lesen fehlgeschlagen: {exc}. Kein Schreiben möglich.')
-            return
-        finally:
-            self.running = False
-            self.query_one('#hcheck', Button).disabled = False
-        self.current = old
         self.pending = target
-        if self.entry[2] == 'TIME' and len(self.entry[0]) == 1:
-            fmt = lambda n: f'{n >> 8:02d}:{n & 255:02d}'
-            detail = f'ALT: {fmt(old)} / NEU: {fmt(target)}\n'
-        else:
-            detail = ''
-        status.update(f'Zielregister: {self.selected_register}\n' + detail + f'Rohwert ALT: {old} (0x{old:04X})\n'
+        # No pre-write FC03 request. The displayed value is only informational;
+        # verification relies solely on the post-write FC03 readback.
+        self.current = None
+        if self.initial_value is not None and len(regs) == 1:
+            try:
+                self.current = self.parse_value(self.initial_value)
+            except ValueError:
+                pass
+        status.update(f'Zielregister: {self.selected_register}\n'
                       f'Rohwert NEU: {target} (0x{target:04X})\n'
-                      'ACHTUNG: Hardware-Schreibzugriff! „JA, schreiben“ ausdrücklich bestätigen.')
-        if not self.query('#hconfirm'):
-            check_button = self.query_one('#hcheck', Button)
-            check_button.parent.mount(Button('JA, schreiben', id='hconfirm', variant='error'), after=check_button)
+                      'Schreibe jetzt per FC06 und verifiziere anschließend per FC03 ...')
+        await self.perform_write()
 
     async def perform_write(self):
-        if self.running or self.pending is None or self.current is None:
+        if self.running or self.pending is None:
             return
         self.running = True
         for button in self.query(Button):
@@ -772,12 +780,12 @@ class WriteHolding(ModalScreen):
                 status.update(ack_message + '\nLese Holding-Register zur Kontrolle ...')
                 actual = await core.read_one(noah, 3, reg, 12, False)
             self.readback = ("H", reg, actual)
-            if actual == target and actual != old:
+            if actual == target and old is not None and actual != old:
                 result = 'VERIFIZIERT: neuer Rohwert zurückgelesen.'
             elif actual == target:
-                result = 'Sollwert zurückgelesen; Wert war bereits vorher identisch.'
-            elif actual == old:
-                result = 'UNVERÄNDERT: alter Rohwert zurückgelesen.'
+                result = 'VERIFIZIERT: Sollwert per FC03 zurückgelesen.'
+            elif old is not None and actual == old:
+                result = 'UNVERÄNDERT: alter Tabellenwert zurückgelesen.'
             else:
                 result = 'ABWEICHUNG: anderer Rohwert zurückgelesen.'
             status.update(ack_message + f'\nRückgelesen: {actual} (0x{actual:04X})\n'
@@ -871,6 +879,35 @@ def read_args(address, file):
                               timeout=12, verbose=False, block_size=16, max_gap=2)
 
 
+def load_refresh_groups(path):
+    """Optional [F1]...[F8] groups, each line REG[,REG...]|exact display label.
+
+    These are selectors for existing entries, not extra register definitions.
+    """
+    groups = {}
+    active = None
+    for lineno, raw in enumerate(path.read_text(encoding='utf-8-sig').splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith('#'):
+            continue
+        match = re.fullmatch(r'\[F([1-8])\]', line, re.I)
+        if match:
+            active = f'f{match.group(1)}'
+            groups.setdefault(active, [])
+            continue
+        if line.startswith('[') and line.endswith(']'):
+            active = None
+            continue
+        if active is None:
+            continue
+        parts = [part.strip() for part in line.split('|')]
+        if len(parts) != 2 or not parts[1] or not re.fullmatch(r'\d+(?:\s*,\s*\d+)*', parts[0]):
+            raise ValueError(f'{path.name}:{lineno}: F-Gruppe erwartet Register[,Register]|Bezeichnung')
+        regs = tuple(int(part.strip()) for part in parts[0].split(','))
+        groups[active].append((regs, parts[1]))
+    return groups
+
+
 class NoahTUI(App):
     TITLE = 'NOAH BLE – Registerübersicht (Diagnose)'
     CSS = '''
@@ -890,6 +927,7 @@ class NoahTUI(App):
         Binding('g', 'device_select', 'Gerät wählen'),
         Binding('k', 'device_config', 'Geräte verwalten'),
         Binding('r', 'refresh', 'Neu lesen'),
+        *[Binding(f'f{i}', f'refresh_group({i})', f'F{i}: Gruppe lesen', show=False) for i in range(1, 9)],
         Binding('q', 'quit', 'Beenden'),
     ]
 
@@ -899,6 +937,7 @@ class NoahTUI(App):
         self.address = address
         self.file = file
         self.layout_entries = core.load_registers(file)
+        self.refresh_groups = load_refresh_groups(file)
         self.register_info = load_register_info()
         self.columns = []
         self.rows = []
@@ -1215,6 +1254,47 @@ class NoahTUI(App):
         finally:
             self.busy = False
 
+    def _holding_table_value(self, col, line_idx, entry):
+        """Prefill a single Holding register from its displayed value.
+
+        Numeric factors are compiled into callables by core.parse_formula(),
+        including factor '1'. Never compare a parsed formula to integer 1.
+        Extract the numeric field after the exact label, independent of
+        display-column widths, then accept it only for identity scaling.
+        """
+        from decimal import Decimal
+
+        regs, label, formula, unit, typ = entry
+        if typ != 'H' or len(regs) != 1:
+            return None
+        line = self.columns[col][line_idx]
+        match = re.search(r'(?<!\S)' + re.escape(label) + r'\s{2,}(.+?)\s{2,}', line)
+        if not match:
+            return None
+        value = match.group(1).strip()
+        if formula == 'TIME':
+            if re.fullmatch(r'(?:[01]?\d|2[0-3]):[0-5]\d', value):
+                return value
+            return None
+        # The ordinary numeric factor '1' is a callable, not the integer 1.
+        # Do not prefill from scaled, enum, bitmask, or null-sentinel values.
+        if formula is not None:
+            if not callable(formula):
+                return None
+            try:
+                if formula(Decimal(0)) != 0 or formula(Decimal(1)) != 1:
+                    return None
+            except (ArithmeticError, ValueError, TypeError):
+                return None
+        if not re.fullmatch(r'\d+', value):
+            return None
+        raw = int(value)
+        if not 0 <= raw <= 65535:
+            return None
+        if getattr(formula, 'null_raws', frozenset()) and raw in formula.null_raws:
+            return None
+        return str(raw)
+
     def action_write(self):
         """C: ASCII config; H: single raw FC06 write, also within register groups."""
         if not self.rows or self.busy or not self.rows[self.column]:
@@ -1232,7 +1312,7 @@ class NoahTUI(App):
                                                else self._slot_values_from_table()),
                                  self.on_timeslot_written)
             else:
-                self.push_screen(WriteHolding(self.address, entry), self.on_write_finished)
+                self.push_screen(WriteHolding(self.address, entry, self._holding_table_value(self.column, line, entry)), self.on_write_finished)
             return
         if typ != 'C' or len(regs) != 1 or formula != 'ASCII':
             self.query_one('#notice', Static).update(
@@ -1261,6 +1341,95 @@ class NoahTUI(App):
     def action_restart(self):
         if not self.busy:
             self.push_screen(RestartDatalogger(self.address))
+
+    async def action_refresh_group(self, number):
+        key = f'f{number}'
+        if self.busy:
+            return
+        selectors = self.refresh_groups.get(key)
+        if not selectors:
+            self.query_one('#notice', Static).update(f'Keine [{key.upper()}]-Gruppe in registers.txt definiert.')
+            return
+        # Resolve labels AND addresses to the actual displayed entries.
+        targets = []
+        for regs, label in selectors:
+            # A range in the label (e.g. 'SOC Bat.1-4') can select
+            # 'SOC Bat.1' ... 'SOC Bat.4' without changing their rows.
+            label_range = re.fullmatch(r'(.*?)(\d+)-(\d+)', label)
+            allowed_labels = {label}
+            if label_range:
+                prefix, first, last = label_range.groups()
+                if int(last) >= int(first) and int(last) - int(first) <= 64:
+                    allowed_labels.update(f'{prefix}{n}' for n in range(int(first), int(last) + 1))
+            found = [(col, idx, entry) for col, rows in enumerate(self.rows)
+                     for idx, (_, entry) in enumerate(rows)
+                     if entry[1] in allowed_labels and entry[4] in ('I', 'H', 'C') and
+                     set(entry[0]).issubset(set(regs))]
+            if (not found or set(regs) != set().union(*(set(item[2][0]) for item in found)) or
+                    len(found) != len({(item[0], item[1]) for item in found})):
+                # Allow a selector to refer to several individually labelled rows
+                # only if the selector label matches them (no guessing by position).
+                self.query_one('#notice', Static).update(
+                    f'{key.upper()}: „{label}“ ({regs}) nicht eindeutig in der Tabelle gefunden. Keine Aktualisierung.')
+                return
+            targets.extend(found)
+        unique = {(col, idx): (col, idx, entry) for col, idx, entry in targets}
+        targets = list(unique.values())
+        self.busy = True
+        loading = GroupLoading(f'{key.upper()}: {len(targets)} Registerzeilen werden aktualisiert ...')
+        self.push_screen(loading)
+        await asyncio.sleep(0)  # Allow Textual to paint the overlay before BLE I/O.
+        try:
+            import protocol as proto
+            readings = {}
+            async with core.NoahBle(self.address) as noah:
+                # Reuse each verified input window once per group.
+                windows = {}
+                for _, _, entry in targets:
+                    regs, _, _, _, typ = entry
+                    for reg in regs:
+                        if (typ, reg) in readings:
+                            continue
+                        if typ == 'I':
+                            window = core.input_window_for(reg)
+                            if window is not None:
+                                if window not in windows:
+                                    windows[window] = await core.read_input_window(noah, *window, 12, False)
+                                start, _ = window
+                                readings[(typ, reg)] = windows[window][reg - start]
+                                continue
+                            readings[(typ, reg)] = await core.read_one(noah, 4, reg, 12, False)
+                        elif typ == 'H':
+                            readings[(typ, reg)] = await core.read_one(noah, 3, reg, 12, False)
+                        else:
+                            data = await core.receive_reply(noah, proto.query_request([reg]), 12, False,
+                                                            expected_func=proto.FUNC_QUERY)
+                            status, values = proto.parse_query_reply(data)
+                            if status != 0 or reg not in values:
+                                raise ValueError(f'C:{reg} nicht lesbar (Status {status})')
+                            readings[(typ, reg)] = values[reg]
+            replacements = []
+            for col, idx, entry in targets:
+                regs, _, formula, unit, typ = entry
+                if typ == 'C':
+                    value = readings[(typ, regs[0])].decode('ascii', errors='backslashreplace')
+                    shown_unit = ''
+                else:
+                    value, shown_unit = core.display_value([readings[(typ, r)] for r in regs], formula, unit)
+                line_idx, _ = self.rows[col][idx]
+                replacements.append((col, idx, line_idx, entry, value, shown_unit))
+            # Commit only after every read succeeds.
+            for col, idx, line_idx, entry, value, shown_unit in replacements:
+                self.columns[col][line_idx] = self._format_row(col, idx, entry, value, shown_unit)
+            self.draw()
+            loading.query_one('#grouploadingbox', Static).update(f'{key.upper()}: {len(replacements)} Zeilen aktualisiert')
+            await asyncio.sleep(0.8)
+        except Exception as exc:
+            loading.query_one('#grouploadingbox', Static).update(f'{key.upper()}: Fehler: {str(exc)[:80]}')
+            await asyncio.sleep(1.8)
+        finally:
+            loading.dismiss()
+            self.busy = False
 
     def action_refresh(self):
         """Return terminal control to the console for a visible BLE reload."""
