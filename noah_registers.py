@@ -257,6 +257,12 @@ def parse_layout_directive(line):
         return ('line', width)
     if body == '---':
         return ('line', None)
+    match = re.fullmatch(r'---(.+?)---', body)
+    if match:
+        caption = match.group(1).strip()
+        if not caption:
+            raise ValueError('Trennlinienbeschriftung darf nicht leer sein')
+        return ('labeled_line', caption)
     match = re.fullmatch(r'===(\d+)===', body)
     if match:
         width = int(match.group(1))
@@ -835,7 +841,7 @@ async def read_list(args):
               f'{"Wert":>{value_width}}  {"Einheit":<{unit_width}}  Status')
     pages = [[]]
     def emit(line=''):
-        pages[-1].append(str(line))
+        pages[-1].append(line)  # Preserve labeled-rule markers until final rendering
     emit(header)
     emit('__RULE__')
     result_iter = iter(results)
@@ -850,6 +856,8 @@ async def read_list(args):
                 emit(('__RULE__' if directive_kind == 'line' else '__DOUBLE__')
                      if directive_value is None else
                      ('-' if directive_kind == 'line' else '=') * directive_value)
+            elif directive_kind == 'labeled_line':
+                emit(('__LABELED_RULE__', directive_value))
             elif directive_kind == 'section':
                 emit(f'[{directive_value}]')
             else:
@@ -906,16 +914,25 @@ async def read_list(args):
     # No BLE reads are repeated: only the final output is rearranged.
     page_widths = []
     for page in pages:
-        width = max((len(line) for line in page
+        width = max((len(f' {line[1]} ') if isinstance(line, tuple) and line[0] == '__LABELED_RULE__'
+                     else len(line) for line in page
                      if line not in ('__RULE__', '__DOUBLE__')), default=len(header))
         page_widths.append(width)
+    def render_layout_line(line, width):
+        if line == '__RULE__':
+            return '-' * width
+        if line == '__DOUBLE__':
+            return '=' * width
+        if isinstance(line, tuple) and line[0] == '__LABELED_RULE__':
+            caption = f' {line[1]} '
+            remaining = max(0, width - len(caption))
+            left = remaining // 2
+            return '-' * left + caption + '-' * (remaining - left)
+        return line
+
     rendered_pages = []
     for page, width in zip(pages, page_widths):
-        rendered_pages.append([
-            '-' * width if line == '__RULE__' else
-            '=' * width if line == '__DOUBLE__' else line
-            for line in page
-        ])
+        rendered_pages.append([render_layout_line(line, width) for line in page])
     if len(rendered_pages) == 1:
         for line in rendered_pages[0]:
             print(line)
