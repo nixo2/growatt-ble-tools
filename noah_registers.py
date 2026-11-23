@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Experimental Growatt NOAH BLE register diagnostic (v0.6.18).
+"""Experimental Growatt NOAH BLE register diagnostic (v0.7).
 
 Requires the unmodified protocol.py and growatt_ble.py from the watchdog project.
 Based on the unofficial NEXA/NOAH protocol specification, section 8.10.
@@ -101,227 +101,6 @@ def explain_register_reply(payload, kind, start, count):
         print('  KEINE gültigen Registerwerte: Nullbytes oder Seriennummernbytes nicht als Messwert interpretieren.')
     return words
 
-
-async def compare_register_reads(address, timeout=12, verbose=False):
-    """Compare single vs. block reads in one authenticated session (read-only)."""
-    print('\nBLE-Diagnose: Einzelregister gegen Blockabfrage (nur lesend).')
-    print('Beispiel: Register 109, Blockstart 96, Anzahl 16.')
-    def ask_number(prompt, default, lower, upper):
-        value = input(f'{prompt} [{default}]: ').strip()
-        result = int(value, 0) if value.lower().startswith('0x') else int(value) if value else default
-        if not lower <= result <= upper:
-            raise ValueError(f'Wert außerhalb {lower}..{upper}')
-        return result
-    reg = ask_number('Input-Register', 109, 0, 65535)
-    start = ask_number('Blockstart', 96, 0, 65535)
-    count = ask_number('Blocklänge', 16, 1, 32)
-    if start + count > 65536 or not start <= reg < start + count:
-        print('Register muss innerhalb des Blocks liegen; Bereich darf 65535 nicht überschreiten.')
-        return
-    async with NoahBle(address, verbose=verbose) as noah:
-        results = []
-        for title, first, length in [('EINZEL 1', reg, 1), ('BLOCK', start, count), ('EINZEL 2', reg, 1)]:
-            print(f'\n--- {title}: Input {first}..{first+length-1} ---')
-            try:
-                payload = await receive_reply(noah, modbus_read_frame(4, first, length), timeout, verbose)
-                words = explain_register_reply(payload, 4, first, length)
-                value = words[reg-first] if words is not None else None
-                results.append((title, value))
-            except (TimeoutError, asyncio.TimeoutError) as exc:
-                print(f'  Keine vollständige Antwort: {exc}')
-                results.append((title, None))
-        print('\n--- Vergleich (nur CRC-geprüfte RTU-Werte) ---')
-        for title, value in results:
-            print(f'  {title:<10}: {value if value is not None else "NICHT DEKODIERBAR"}')
-        if results[1][1] is not None and (results[0][1] is None or results[2][1] is None):
-            print('  Befund: Block liefert gültigen Wert, mindestens eine Einzelabfrage nicht.')
-            print('  Das belegt eine längen-/abfrageabhängige Antwort, nicht die Ursache.')
-
-
-
-async def probe_read_windows(address, timeout=12):
-    """Read-only bounded matrix to identify working windows for problematic inputs."""
-    print('\nRegisterfenster-Diagnose (nur FC04, keine Schreibbefehle).')
-    raw = input('Zielregister [109,119,120]: ').strip()
-    targets = [int(x.strip()) for x in raw.split(',')] if raw else [109, 119, 120]
-    if not targets or len(targets) > 5 or any(x < 0 or x > 65535 for x in targets):
-        raise ValueError('1 bis 5 Register im Bereich 0..65535 angeben')
-    # Distinguish a start-address restriction from a minimum-count restriction.
-    windows = []
-    for reg in targets:
-        for start, count in [(reg,1),(reg-1,2),(reg,2),(reg-3,4),
-                             (reg,4),(reg-7,8),(reg,8),(reg-15,16),
-                             (reg,16)]:
-            if start >= 0 and start + count <= 65536:
-                windows.append((start,count))
-    # Known successful reference window and the boundary around 121/122.
-    windows += [(96,16),(106,16),(112,16),(120,2),(121,2),(122,2)]
-    windows = list(dict.fromkeys(windows))
-    print(f'{len(windows)} unterschiedliche Abfragen; bis zu {len(windows)*timeout:.0f}s bei lauter Timeouts.')
-    if input('Diagnose starten? [ja/NEIN]: ').strip().lower() != 'ja':
-        return
-    results = []
-    async with NoahBle(address) as noah:
-        for index,(start,count) in enumerate(windows,1):
-            try:
-                payload = await receive_reply(noah, modbus_read_frame(4,start,count), timeout, False)
-                body = payload[10:] if len(payload)>=10 else b''
-                status, words = decode_modbus(body,4,count)
-                if words is not None:
-                    targets_here = ', '.join(f'{r}={words[r-start]}' for r in targets if start<=r<start+count)
-                    outcome = 'OK' + (f' ({targets_here})' if targets_here else '')
-                else:
-                    outcome = f'UNGUELTIG ({len(body)} Body-Bytes: {body.hex(" ")})'
-            except (TimeoutError,asyncio.TimeoutError):
-                outcome = 'TIMEOUT'
-            except Exception as exc:
-                outcome = f'FEHLER {type(exc).__name__}: {exc}'
-            results.append((start,count,outcome))
-            print(f'[{index:02}/{len(windows):02}] I:{start:>3}..{start+count-1:<3} '
-                  f'({count:>2}): {outcome}',flush=True)
-            await asyncio.sleep(0.12)
-    print('\n--- Erfolgreiche Lesefenster je Zielregister ---')
-    for reg in targets:
-        valid = [(start,count) for start,count,outcome in results
-                 if outcome.startswith('OK') and start<=reg<start+count]
-        if valid:
-            valid.sort(key=lambda x:(x[1],abs(x[0]-reg)))
-            print(f'I:{reg}: kuerzestes gueltiges Fenster: '
-                  f'{valid[0][0]}..{valid[0][0]+valid[0][1]-1} ({valid[0][1]} Register)')
-        else:
-            print(f'I:{reg}: kein gueltiges Fenster in dieser Testmatrix')
-    print('Hinweis: Ein gueltiges Fenster ist nicht zwingend das einzig moegliche.')
-
-
-async def probe_register_119(address, timeout=12):
-    """Read-only focused sliding-window search around I:119 and I:120."""
-    print('\nGezielte Lesefenster-Diagnose I:119/120 (nur FC04, lesend).')
-    # Exhaustive windows containing I:119 for 2, 4 and 8 registers;
-    # additional reference and narrower 16-register windows for I:120.
-    windows = []
-    for count in (2, 4, 8):
-        for start in range(119 - count + 1, 120):
-            windows.append((start, count))
-    windows += [(120, 2), (118, 4), (119, 4), (113, 8), (114, 8), (115, 8),
-                (106, 16), (105, 16), (104, 16), (103, 16)]
-    windows = list(dict.fromkeys(windows))
-    print(f'{len(windows)} Abfragen, maximal {len(windows)*timeout:.0f}s bei Timeouts.')
-    if input('Diagnose starten? [ja/NEIN]: ').strip().lower() != 'ja':
-        return
-    results = []
-    async with NoahBle(address) as noah:
-        for idx, (start, count) in enumerate(windows, 1):
-            try:
-                payload = await receive_reply(noah, modbus_read_frame(4, start, count), timeout, False)
-                body = payload[10:] if len(payload) >= 10 else b''
-                status, words = decode_modbus(body, 4, count)
-                if words is not None:
-                    values = ', '.join(f'I:{reg}={words[reg-start]}'
-                                       for reg in (119, 120) if start <= reg < start+count)
-                    outcome = 'OK' + (f' ({values})' if values else '')
-                else:
-                    outcome = f'UNGUELTIG ({len(body)} Body-Bytes: {body.hex(" ")})'
-            except (TimeoutError, asyncio.TimeoutError):
-                outcome = 'TIMEOUT'
-            except Exception as exc:
-                outcome = f'FEHLER {type(exc).__name__}: {exc}'
-            results.append((start, count, outcome))
-            print(f'[{idx:02}/{len(windows):02}] I:{start:>3}..{start+count-1:<3} '
-                  f'({count:>2}): {outcome}', flush=True)
-            await asyncio.sleep(0.12)
-    print('\n--- Kuerzeste erfolgreiche Fenster ---')
-    for reg in (119, 120):
-        good = [(start, count) for start, count, result in results
-                if result.startswith('OK') and start <= reg < start+count]
-        if good:
-            start, count = min(good, key=lambda x: (x[1], abs(x[0]-reg)))
-            print(f'I:{reg}: I:{start}..{start+count-1} ({count} Register)')
-        else:
-            print(f'I:{reg}: kein erfolgreiches Fenster in dieser Testmatrix')
-    print('Nur getestete Fenster bewertet; keine Aussage ueber andere Fenster.')
-
-
-
-async def scan_sliding_16(address, timeout=12):
-    """Read-only FC04 scan: aligned 16-word blocks, then shifted windows."""
-    print('\n16er-Registerscan mit verschiebbaren Lesefenstern (nur FC04).')
-    print('Achtung: Unbekannte Registerbereiche koennen vom Geraet abgelehnt werden.')
-    def number(label, default):
-        raw = input(f'{label} [{default}]: ').strip()
-        return int(raw) if raw else default
-    first = number('Erstes Input-Register', 0)
-    last = number('Letztes Input-Register (inklusive)', 127)
-    shift = number('Maximale Verschiebung nach links (0..15)', 15)
-    if not (0 <= first <= last <= 65535 and last-first < 256 and 0 <= shift <= 15):
-        raise ValueError('Bereich max. 256 Register, Verschiebung 0..15')
-    # Fixed 16-word blocks aligned to multiples of 16; shifts can overlap
-    # the requested range, but results outside the range are not reported.
-    bases = list(range((first//16)*16, (last//16)*16+1, 16))
-    print(f'{len(bases)} feste 16er-Bloecke; maximal {len(bases)*(shift+1)} Versuche.')
-    if input('Scan starten? [ja/NEIN]: ').strip().lower() != 'ja':
-        return
-    values = {}
-    windows = set()
-    successful = []
-    failures = []
-    attempts = 0
-    async with NoahBle(address) as noah:
-        async def query(start):
-            nonlocal attempts
-            if start < 0 or start + 16 > 65536 or start in windows:
-                return False
-            windows.add(start)
-            attempts += 1
-            try:
-                payload = await receive_reply(noah, modbus_read_frame(4, start, 16), timeout, False)
-                status, words = decode_modbus(payload[10:] if len(payload) >= 10 else b'', 4, 16)
-                if words is None:
-                    failures.append((start, status))
-                    print(f'[{attempts:03}] I:{start:>3}..{start+15:<3} NICHT LESBAR ({status})', flush=True)
-                    return False
-                for offset, word in enumerate(words):
-                    reg = start + offset
-                    if first <= reg <= last:
-                        values[reg] = word
-                successful.append(start)
-                print(f'[{attempts:03}] I:{start:>3}..{start+15:<3} OK (CRC), '
-                      f'{len(values)}/{last-first+1} Register erfasst', flush=True)
-                return True
-            except (KeyboardInterrupt, SystemExit):
-                raise
-            except Exception as exc:
-                failures.append((start, f'{type(exc).__name__}: {exc}'))
-                print(f'[{attempts:03}] I:{start:>3}..{start+15:<3} FEHLER: {exc}', flush=True)
-                return False
-        # First: all aligned blocks. This keeps the scan reproducible.
-        for base in bases:
-            await query(base)
-            await asyncio.sleep(0.12)
-        # Second: only try shifted windows if the aligned block contains
-        # at least one register that has not already been covered.
-        for base in bases:
-            if all(r in values for r in range(max(base,first), min(base+15,last)+1)):
-                continue
-            for offset in range(1, shift+1):
-                start = base-offset
-                if start < 0:
-                    break
-                # Skip windows that cannot add a missing register.
-                if not any(r not in values for r in range(max(start,first), min(start+15,last)+1)):
-                    continue
-                await query(start)
-                await asyncio.sleep(0.12)
-                if all(r in values for r in range(max(base,first), min(base+15,last)+1)):
-                    break
-    missing = [r for r in range(first,last+1) if r not in values]
-    print(f'\n--- Ergebnis: {len(values)}/{last-first+1} Register, '
-          f'{len(successful)} gueltige Fenster, {attempts} Anfragen ---')
-    print('Erfolgreiche Fenster: ' + (', '.join(f'{s}..{s+15}' for s in successful) or '(keine)'))
-    print('Nicht abgedeckte Register: ' + (', '.join(map(str,missing)) if missing else '(keine)'))
-    print('\nGelesene Rohwerte (keine Skalierung):')
-    for reg, val in sorted(values.items()):
-        print(f'  I:{reg:<4} = {val:>5} (0x{val:04X})')
-    print('Hinweis: Nicht abgedeckt bedeutet nicht, dass das Register nicht existiert.')
 
 # Experimentally CRC-validated input windows on NOAH (FC04).
 # The last window overlaps the previous one intentionally.
@@ -493,8 +272,17 @@ def load_registers(path):
     if not path.is_file():
         raise ValueError(f'Registerdatei nicht gefunden: {path}')
     entries = []
+    in_refresh_group = False
     for lineno, raw in enumerate(path.read_text(encoding='utf-8-sig').splitlines(), 1):
         line = raw.strip()
+        if re.fullmatch(r'\[F[1-8]\]', line, re.I):
+            in_refresh_group = True
+            continue
+        if in_refresh_group:
+            if re.fullmatch(r'\[[^]]+\]', line):
+                in_refresh_group = False
+            else:
+                continue
         if not line or line.startswith('#'):
             continue
         try:
@@ -1372,10 +1160,6 @@ async def interactive_menu():
             print('  2) Register manuell lesen / schreiben')
             print('  3) Datenlogger über BLE neu starten')
             print('  4) Konfigurationsparameter lesen (Growatt 0x19)')
-            print('  5) BLE-Diagnose: Einzel- / Block- / Einzelabfrage vergleichen')
-            print('  6) Lesefenster-Diagnose (Startadresse und Blocklaenge)')
-            print('  7) I:119/120: gezielte 2er-, 4er- und 8er-Fenster')
-            print('  8) 16er-Registerscan mit verschiebbaren Lesefenstern')
             print('  g) Anderes Gerät auswählen')
             print('  q) Beenden')
             action = input('Aktion: ').strip().lower()
@@ -1383,7 +1167,7 @@ async def interactive_menu():
                 return
             if action == 'g':
                 break
-            if action not in ('1', '2', '3', '4', '5', '6', '7', '8'):
+            if action not in ('1', '2', '3', '4'):
                 print('Ungültige Auswahl.')
                 continue
             try:
@@ -1396,14 +1180,6 @@ async def interactive_menu():
                     await restart_datalogger(address)
                 elif action == '4':
                     await read_config_parameter(address)
-                elif action == '5':
-                    await compare_register_reads(address)
-                elif action == '6':
-                    await probe_read_windows(address)
-                elif action == '7':
-                    await probe_register_119(address)
-                else:
-                    await scan_sliding_16(address)
             except (OSError, ValueError, TimeoutError, asyncio.TimeoutError, RuntimeError) as exc:
                 print(f'Fehler: {exc}')
             input('\nEnter für das Menü ...')

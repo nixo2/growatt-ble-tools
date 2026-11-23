@@ -1,11 +1,11 @@
-# Growatt NOAH – BLE Register Diagnostics and Terminal Interface
+# Growatt BLE Tools – NOAH Register Reader & Terminal Interface
 
-**Updated: November 22, 2026**  
-**`noah_registers.py` v0.6.22 · `noah_tui.py` v0.8.7**
+**Updated: November 23, 2026**  
+**`noah_registers.py` v0.7 · `noah_tui.py` v0.9**
 
 Two Python applications for reading and diagnosing Growatt NOAH battery systems directly over Bluetooth Low Energy (BLE):
 
-- **`noah_registers.py`**: Command-line utility for device discovery, individual reads, register lists, and diagnostics.
+- **`noah_registers.py`**: Command-line utility for device discovery, manual register reads/writes, register lists, and configuration queries.
 - **`noah_tui.py`**: Interactive Textual-based terminal interface with device management, a two-column register display, detail views, and selected write operations.
 
 Both applications use the existing `protocol.py` and `growatt_ble.py` modules. BLE access does not require the Growatt cloud or MQTT. This project is **unofficial and experimental**; in particular, register meanings and write operations have not been approved by Growatt for this use.
@@ -24,13 +24,14 @@ Place these files in the same project directory:
 
 ```text
 project/
-├── noah_registers.py       # v0.6.22
-├── noah_tui.py             # v0.8.7
+├── noah_registers.py       # v0.7
+├── noah_tui.py             # v0.9
 ├── protocol.py             # BLE protocol module
 ├── growatt_ble.py          # BLE device communication
 ├── registers.txt           # Register selection, conversion, layout
 ├── register_info.txt       # Optional explanations in the detail view
-└── noah_devices.txt        # Device list managed by the TUI
+├── noah_devices.txt        # Device list managed by the TUI
+└── docs/README_noah_ble_tools.md  # This guide (German: _DE.md)
 ```
 
 **Note on versioned filenames:** Rename the supplied `noah_registers_v0_6_22.py` and `noah_tui_v0_8_7.py` files to `noah_registers.py` and `noah_tui.py` before running them. The TUI explicitly imports `noah_registers`.
@@ -79,7 +80,7 @@ python noah_registers.py read --address 'AA:BB:CC:DD:EE:FF' --type input --regis
 python noah_registers.py read --address 'AA:BB:CC:DD:EE:FF' --type holding --register 254 --count 5
 ```
 
-Running `noah_registers.py` without a subcommand opens its interactive diagnostics menu.
+Running `noah_registers.py` without a subcommand opens the interactive menu (options 1–4: register list, manual register read/write, datalogger restart, configuration query). The former diagnostic test menu items 5–8 were removed from v0.7; the optimized read windows remain in regular use.
 
 ## 3. Register Types and Transport
 
@@ -185,6 +186,18 @@ Standalone lines enclosed in double asterisks control the display:
 
 `**SPALTE**` or `**SEITENUMBRUCH**` starts a new display column. These directive keywords remain in German because they are part of the parser syntax. Headings and separators do not trigger register reads.
 
+### Targeted Refresh Groups (F1–F8)
+
+Optional `[F1]` through `[F8]` sections in `registers.txt` specify existing entries to refresh without reloading the complete table. Each selector uses `Register[,Register...]|Exact display label`. For example:
+
+```text
+[F1]
+13|SOC Total
+29,41,53,65|SOC Bat.1-4
+```
+
+Group selectors are not additional register definitions. Press the matching function key to refresh the configured measurements. If a group is absent, the TUI reports that no group is configured.
+
 ## 5. TUI Controls
 
 | Key | Action |
@@ -193,12 +206,19 @@ Standalone lines enclosed in double asterisks control the display:
 | `←` / `→` | Select left / right column |
 | `Enter` | Show details for the selected entry |
 | `R` | Refresh all registers |
+| `F1`–`F8` | Refresh the corresponding configured register group |
 | `G` | Switch device |
 | `K` | Open device management |
 | `N` | Trigger datalogger restart (**active operation**) |
 | `Q` | Quit or close the current dialog |
 
-The TUI reads registers through `noah_registers.py`, displays the results in two columns, and opens a detail view with Enter. The optional `register_info.txt` adds explanatory notes under section headings such as `[I:120]`, `[H:254]`, or `[C:21]`.
+The TUI reads registers through `noah_registers.py`, displays the results in two columns, and opens a detail view with Enter. Selecting the timeslot heading allows switching between nine timeslots. The optional `register_info.txt` adds explanatory notes under section headings such as `[I:120]`, `[H:254]`, or `[C:21]`.
+
+### Fast Holding-Register Editor (v0.9)
+
+For single holding registers with an unambiguous raw table value (such as H:250 charge limit, H:251 discharge limit, and H:252 default output power), the editor **prefills immediately from the already displayed table**. It does **not** open a new BLE connection to read the value when the dialog opens and does **not** perform a pre-write read. After submitting, it writes via Modbus FC06 and verifies the result with a single FC03 readback. The verified value updates the table. If the display is scaled or cannot safely be interpreted as a raw value, manual entry may be required; never assume a scaled value is the register's raw value.
+
+The timeslot editor likewise reuses values from the current table where possible; each of the nine timeslots comprises five holding registers. Timeslot changes use FC16 and FC03 verification. ASCII configuration writes use Growatt SET and QUERY for verification.
 
 ### Write Operations – Use Caution
 
@@ -234,7 +254,7 @@ The `list` command supports options including `--timeout`, `--block-size` (defau
 
 ## 8. Project Status and Limitations
 
-BLE register reads, including the optimized input windows, have previously been used successfully on **four NOAH devices**. Mixed register/configuration support in `noah_registers.py` v0.6.22 and `noah_tui.py` v0.8.7 is newer and still requires a complete real-device test. The observed match between firmware components and the app is strong evidence, but it does not replace official NOAH register documentation.
+BLE register reads, including the optimized input windows, have previously been used successfully on **four NOAH devices**. The current NOAH workflow, including fast holding-register prefilling and post-write verification, has been tested by the project maintainer; other firmware variants and devices may behave differently. The observed match between firmware components and the app is strong evidence, but it does not replace official NOAH register documentation.
 
 The SOH value at I:102 should also be interpreted cautiously: for BMS version 14, the related NEXA documentation describes a constant value of 100. Whether and to what extent the NOAH behaves identically should be verified separately.
 

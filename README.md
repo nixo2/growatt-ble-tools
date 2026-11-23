@@ -14,11 +14,11 @@ The **Register Reader and interactive TUI** are the main tools. A separate **Wat
 
 | Tool | Purpose | Documentation |
 | --- | --- | --- |
-| **Register Reader** (`noah_registers.py`) | BLE device discovery, command-line register reads, register lists, and diagnostics. | [Register Reader & TUI guide](docs/README_noah_registers.md) |
-| **Register TUI** (`noah_tui.py`) | Interactive terminal interface to inspect registers, view details, and perform supported configuration changes. | [Register Reader & TUI guide](docs/README_noah_registers.md) |
+| **Register Reader** (`noah_registers.py`) | BLE device discovery, command-line register reads, register lists, and diagnostics. | [Register Reader & TUI guide](docs/README_noah_ble_tools.md) |
+| **Register TUI** (`noah_tui.py`) | Interactive terminal interface to inspect registers, view details, and perform supported configuration changes. | [Register Reader & TUI guide](docs/README_noah_ble_tools.md) |
 | **BLE Watchdog** (`noah_watchdog.py`) | Periodically check connectivity, compare MQTT host/port with local credentials, and optionally recover settings or restart the datalogger. | [Watchdog guide](docs/README_watchdog.md) |
 
-A [German guide for the Register Reader and TUI](docs/README_noah_registers_DE.md) is also available.
+A [German guide for the Register Reader and TUI](docs/README_noah_ble_tools_DE.md) is also available.
 
 ## Quick start
 
@@ -52,7 +52,7 @@ Scan for nearby supported devices using the command-line reader:
 python noah_registers.py scan --seconds 8
 ```
 
-The register tools use `registers.txt` for register definitions and display configuration. See the [detailed reader documentation](docs/README_noah_registers.md) before attempting write operations.
+The register tools use `registers.txt` for register definitions and display configuration. See the [detailed reader documentation](docs/README_noah_ble_tools.md) before attempting write operations.
 
 ### Watchdog
 
