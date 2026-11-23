@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Experimental Growatt NOAH BLE register diagnostic (v0.6.20).
+"""Experimental Growatt NOAH BLE register diagnostic (v0.7).
 
 Requires the unmodified protocol.py and growatt_ble.py from the watchdog project.
 Based on the unofficial NEXA/NOAH protocol specification, section 8.10.
