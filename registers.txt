@@ -57,18 +57,28 @@ Register|Bezeichnung|Faktor|Einheit|Registertyp
 55|Verbindung Router|ASCII|0 OK|C
 60|Verbindung Server|ASCII|16 OK|C
 **LEER**
+#**---**#
+#**[UNBEKANNTE HOLDING-REGISTER]**#
+#**---**#
+#43|Unbekannt|1||H#
+#45,46,47,48,49,50|Gerätezeit?|1 NOHEX||H#
+#56-58|Kennung? ASCII|ASCII||H#
+#62-70|Kennung/Zeitstempel? ASCII|ASCII||H#
+#300-304|Unbekannt|1 NOHEX||H#
+#**---**#
+#**[UNBEKANNTE INFO-REGISTER]**#
+#**---**#
+#19|Unbekannt|1||I#
 **---**
-**[UNBEKANNTE HOLDING-REGISTER]**
+**Gekoppelte Geräte     [Enter: Auswahl]**
 **---**
-43|Unbekannt|1||H
-45,46,47,48,49,50|Gerätezeit?|1 NOHEX||H
-56-58|Kennung? ASCII|ASCII||H
-62-70|Kennung/Zeitstempel? ASCII|ASCII||H
-300-304|Unbekannt|1 NOHEX||H
-**---**
-**[UNBEKANNTE INFO-REGISTER]**
-**---**
-19|Unbekannt|1||I
+102|RF-Geräteliste|ASCII||C
+122|WLAN-Geräte|ASCII||C
+123|Suchliste|MAC||C
+143|Routed Modbus|ASCII||C
+313|Anzahl Zubehörgeräte|x||H
+310|Einspeiseleistung Messeinrichtung|1||H
+311|Bezugsleistung Messeinrichtung|1||H
 
 ##Aktualisierung per F-Tasten##
 [F1]
@@ -96,6 +106,30 @@ Register|Bezeichnung|Faktor|Einheit|Registertyp
 109|Ausgangsspannung
 
 [F4]
+72|PV-Energie heute
+74|PV-Energie Monat
+76|PV-Energie Jahr
+78|Abgegebene Energie
+
+[F5]
+13|SOC Total
+29,41,53,65|SOC Bat.1-4
+8|Modus
+10|Akku-Status
+90|Ladegrenze
+91|Entladegrenze
+14|Heizung
+7|PV-Leistung-gesamt
+2|Ausgangsleistung
+11|Ladeleistung
+30,42,54,66|Temp. Bat.1-4
+94,97|Temp. PV1-2
+98|Temp. Noah
+99|Zellspannung max.
+100|Zellspannung min.
+92,95|Spannung PV1-2
+93,96|Strom PV1-2
+109|Ausgangsspannung
 72|PV-Energie heute
 74|PV-Energie Monat
 76|PV-Energie Jahr

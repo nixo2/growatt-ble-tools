@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Experimental Growatt NOAH BLE register diagnostic (v0.7).
+"""Experimental Growatt NOAH BLE register diagnostic (v0.8).
 
 Requires the unmodified protocol.py and growatt_ble.py from the watchdog project.
 Based on the unofficial NEXA/NOAH protocol specification, section 8.10.
@@ -18,6 +18,26 @@ import protocol as p
 from growatt_ble import NoahBle
 
 REGISTER_FILE = Path(__file__).resolve().parent / 'registers.txt'
+
+
+def format_config_row(prefix, value, value_width, unit, unit_width, status):
+    """Wrap long config values without widening either table column."""
+    value = str(value)
+    chunks = []
+    if re.fullmatch(r'(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}(?:\s*&\s*(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})*', value):
+        chunks = [part.strip() for part in value.split('&')]
+        value = chunks.pop()
+    while len(value) > value_width:
+        cut = max(value.rfind(',', 0, value_width), value.rfind('&', 0, value_width)) + 1
+        if not cut:
+            cut = value_width
+        chunks.append(value[:cut])
+        value = value[cut:].lstrip()
+    chunks.append(value)
+    return '\n'.join(
+        (prefix if i == 0 else ' ' * len(prefix)) + f'{chunk:>{value_width}}' +
+        (f'  {unit:<{unit_width}}  [{status}]' if i == len(chunks)-1 else '')
+        for i, chunk in enumerate(chunks))
 
 
 def modbus_read_frame(kind, start, count):
@@ -187,7 +207,7 @@ def parse_formula(source, lineno):
     comb_match = re.fullmatch(r'Comb((?:HB|LB)+)', expr, re.I)
     if comb_match:
         return ('COMB', tuple(re.findall(r'HB|LB', comb_match.group(1).upper())))
-    if not expr or expr.upper() in ('ASCII', 'TIME', 'HEX'):
+    if not expr or expr.upper() in ('ASCII', 'TIME', 'HEX', 'MAC', 'RAWHEX'):
         return None if not expr else expr.upper()
     # Legacy factors (0.01, 1) are multiplication factors.
     if re.fullmatch(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)', expr):
@@ -343,6 +363,8 @@ def load_registers(path):
             raise ValueError(f'{path.name}:{lineno}: {exc}') from None
         if factor_text.strip().upper() == 'TIME':
             formula = 'TIME'
+        if formula in ('MAC', 'RAWHEX') and register_type != 'C':
+            raise ValueError(f'{path.name}:{lineno}: {formula} ist nur für C-Parameter erlaubt')
         if formula == 'ASCII' and not regs:
             raise ValueError(f'{path.name}:{lineno}: ASCII benötigt Register')
         if register_type in ('I,C', 'H,C'):
@@ -381,6 +403,53 @@ def load_registers(path):
 
 def is_null_raw(formula, raw):
     return raw in getattr(formula, 'null_raws', ())
+
+
+def config_mac_numbers(raw):
+    text = raw.decode('ascii').strip(' \t\r\n\x00')
+    if not text:
+        return []
+    numbers = []
+    for part in text.split('&'):
+        part = part.strip()
+        if not re.fullmatch(r'[0-9]+', part) or int(part) >= 1 << 48:
+            raise ValueError(f'Ungültiger MAC-Wert: {raw!r}')
+        numbers.append(int(part))
+    return list(dict.fromkeys(numbers))
+
+
+def display_config_value(values, formula, unit):
+    """Format variable-length C parameter payloads, including decimal ASCII IDs."""
+    chunks = []
+    for raw in values:
+        if formula == 'RAWHEX':
+            chunks.append(raw.hex(' ').upper())
+        elif formula == 'MAC':
+            chunks.append(' & '.join(n.to_bytes(6, 'big').hex(':').upper() for n in config_mac_numbers(raw)))
+        elif formula == 'HEX':
+            text = raw.decode('ascii').strip()
+            if not re.fullmatch(r'[0-9]+', text):
+                raise ValueError(f'{formula}: keine dezimale ASCII-Zahl')
+            number = int(text, 10)
+            if formula == 'MAC':
+                if number >= 1 << 48:
+                    raise ValueError('MAC: Wert außerhalb des 48-Bit-Bereichs')
+                chunks.append(number.to_bytes(6, 'big').hex(':').upper())
+            else:
+                chunks.append(f'{number:X}')
+        else:
+            chunks.append(raw.decode('utf-8', errors='backslashreplace')
+                          .encode('unicode_escape').decode('ascii'))
+    legend = parse_enum(unit)
+    if legend is not None and formula not in ('HEX', 'MAC', 'RAWHEX'):
+        for i, chunk in enumerate(chunks):
+            try:
+                number = int(chunk.strip())
+            except ValueError:
+                continue
+            chunks[i] = f'{number} ({legend.get(number, "unbekannt")})'
+        unit = ''
+    return ', '.join(chunks), unit
 
 
 def display_value(values, formula, unit):
@@ -725,36 +794,12 @@ async def read_list(args):
             if missing:
                 results.append((reg_label, label, '—', unit, 'NICHT LESBAR'))
             else:
-                chunks = []
-                for reg in regs:
-                    raw = values[('C', reg)]
-                    if formula == 'ASCII':
-                        # Escape control bytes instead of dropping them silently.
-                        chunks.append(raw.decode('utf-8', errors='backslashreplace')
-                                      .encode('unicode_escape').decode('ascii'))
-                    elif formula == 'HEX':
-                        chunks.append(raw.hex(' ').upper())
-                    else:
-                        chunks.append(raw.decode('utf-8', errors='backslashreplace')
-                                      .encode('unicode_escape').decode('ascii'))
-                # Optional numeric status legends in the Einheit column, as for I/H.
-                # Example: 60|Verbindung Server|ASCII|0 Getrennt, 16 Verbunden|C
-                # The legend is presentation-only; unknown codes remain visible.
-                legend = parse_enum(unit)
-                if legend is not None and formula != 'HEX':
-                    interpreted = []
-                    for chunk in chunks:
-                        try:
-                            number = int(chunk.strip())
-                        except ValueError:
-                            interpreted.append(chunk)
-                        else:
-                            interpreted.append(f'{number} ({legend.get(number, "unbekannt")})')
-                    chunks = interpreted
-                    shown_unit = ''
-                else:
-                    shown_unit = unit
-                results.append((reg_label, label, ', '.join(chunks), shown_unit, 'OK'))
+                try:
+                    rendered, shown_unit = display_config_value(
+                        [values[('C', reg)] for reg in regs], formula, unit)
+                    results.append((reg_label, label, rendered, shown_unit, 'OK'))
+                except (ValueError, UnicodeError) as exc:
+                    results.append((reg_label, label, '—', unit, f'Umrechnung: {exc}'))
             continue
         kind = 4 if typ == 'I' else 3
         missing = [reg for reg in regs if (kind, reg) not in values]
@@ -829,14 +874,14 @@ async def read_list(args):
         is_contiguous = (len(regs) > 1 and
                          regs == tuple(range(regs[0], regs[-1] + 1)))
         if len(regs) == 1 or typ in ('C', 'I,C', 'H,C'):
-            compact_widths.append(len(result[2]))
+            compact_widths.append(min(len(result[2]), 17) if typ == 'C' and any(r in (102, 122, 123) for r in regs) else len(result[2]))
         elif (isinstance(formula, tuple) and formula[0] == 'COMB'):
             compact_widths.append(len(result[2]))
         elif (not is_contiguous or getattr(formula, 'nohex', False)) and formula != 'HEX':
             compact_widths.append(len(format_separate_values(regs, formula, typ)))
     value_width = max([5, *compact_widths])
-    unit_width = max((len(result[3]) for entry, result in zip(entries, results)
-                      if len(entry[0]) == 1 or entry[4] in ('C', 'I,C', 'H,C') or getattr(entry[2], 'nohex', False) or (isinstance(entry[2], tuple) and entry[2][0] == 'COMB')), default=4)
+    unit_width = max(7, max((len(result[3]) for entry, result in zip(entries, results)
+                      if len(entry[0]) == 1 or entry[4] in ('C', 'I,C', 'H,C') or getattr(entry[2], 'nohex', False) or (isinstance(entry[2], tuple) and entry[2][0] == 'COMB')), default=4))
     header = (f'{"Reg":>{reg_width}}  {"Bezeichnung":<{label_width}}  '
               f'{"Wert":>{value_width}}  {"Einheit":<{unit_width}}  Status')
     pages = [[]]
@@ -906,7 +951,8 @@ async def read_list(args):
         elif typ == 'C':
             # Config values share the same right-aligned value column as I/H.
             # Keep status on the same row even for variable-length ASCII data.
-            emit(prefix + f'{value:>{value_width}}  {shown_unit:<{unit_width}}  [{status}]')
+            for part in format_config_row(prefix, value, value_width, shown_unit, unit_width, status).splitlines():
+                emit(part)
         else:
             emit(prefix + f'{value:>{value_width}}  {shown_unit:<{unit_width}}  [{status}]')
     # Calculate each page's width from actual rendered rows, not a fixed 120-char rule.
