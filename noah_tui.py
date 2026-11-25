@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""NOAH BLE TUI v0.9: cached timeslot editor, keyboard navigation and direct selection.
+"""NOAH BLE TUI v0.9.1: cached timeslot editor, keyboard navigation and direct selection.
 
 Requires textual, bleak, and the unchanged noah_registers.py,
 protocol.py, growatt_ble.py and registers.txt in the same directory.
@@ -12,6 +12,8 @@ import json
 import re
 import struct
 import sys
+import time
+from datetime import datetime
 from pathlib import Path
 
 from rich.text import Text
@@ -20,7 +22,8 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Header, Static, Input, Button, Label
+from textual.widgets import Footer, Header, Static, Input, Button, Label, Select, OptionList
+from textual.widgets.option_list import Option
 
 import noah_registers as core
 
@@ -106,6 +109,17 @@ def collect_columns(output, layout_entries):
             columns[1].append(line[page_start:].rstrip())
         else:
             columns[0].append(line.rstrip())
+    # Keep wrapped configuration rows as one selectable logical row.
+    for col, lines in enumerate(columns):
+        merged = []
+        for line in lines:
+            if (merged and line.startswith(' ' * (lines[0].find('Bezeichnung') + 11))
+                    and line.strip() and re.match(r'^\s*(?:102|122|123)\s{2,}', merged[-1])
+                    and not re.search(r'\[[^\]]+\]\s*$', merged[-1])):
+                merged[-1] += '\n' + line
+            else:
+                merged.append(line)
+        columns[col] = merged
     # The register list is authoritative for page membership and order.
     page = 0
     wanted = [[] for _ in columns]
@@ -261,6 +275,221 @@ class RegisterDetails(ModalScreen):
             return
         self.dismiss()
         self.app.call_after_refresh(self.app.action_write)
+
+
+class AccessorySearch(ModalScreen):
+    """Experimental WLAN discovery via BLE; never writes C123."""
+    BINDINGS = [Binding('escape', 'close', 'Schließen')]
+    CSS = """
+    AccessorySearch { align: center middle; background: $background 75%; }
+    #accessorybox { width: 85; max-width: 95%; height: 90%; border: round $accent; background: $panel; padding: 1 2; }
+    #accessorybox Horizontal { height: 3; }
+    #accessorybox Input { width: 1fr; }
+    #accessory_manual_label { margin-top: 1; height: 1; }
+    #accessory_status { height: auto; min-height: 3; }
+    #accessory_results { height: 1fr; min-height: 4; border: solid $accent; }
+    #accessory_list { height: 1fr; }
+    #accessory_access { height: 3; }
+    #accessory_log { height: 1fr; }
+    """
+    TYPES = {
+        'Shelly Pro 3EM': ('_http._tcp.', 2),
+        'Shelly 3EM': ('_http._tcp.', 1),
+        'Shelly Pro 3EM 3CT63': ('_http._tcp.', 8),
+        'Shelly Pro EM 50': ('_http._tcp.', 7),
+        'Shelly Pro 1PM': ('_http._tcp.', 6),
+        'Everhome Ecotracker': ('_everhome._tcp.', 3),
+        'Sparky P1': ('_chargee_p1._tcp.', 50),
+        'Benutzerdefiniert': None,
+    }
+    DURATION = 60
+    INTERVAL = 5
+
+    def __init__(self, address):
+        super().__init__()
+        self.address = address
+        self.running = False
+        self.results = {}
+        self.scan_log = []
+
+    def compose(self):
+        with Vertical(id='accessorybox'):
+            yield Label('Gekoppelte Geräte – experimentelle WLAN-Suche')
+            yield Select([(name, name) for name in self.TYPES], value='Shelly Pro 3EM', allow_blank=False, id='accessory_type')
+            yield Label('Optional: mDNS-Dienst / Typ-ID (nur Benutzerdefiniert)', id='accessory_manual_label')
+            with Horizontal():
+                yield Input(value='_http._tcp.', placeholder='mDNS-Dienst', id='accessory_service')
+                yield Input(value='2', placeholder='Typ-ID', id='accessory_model')
+            with Horizontal():
+                yield Button('Suche starten', id='accessory_start', variant='primary')
+                yield Button('Gerät entkoppeln', id='accessory_delete')
+                yield Button('Schließen', id='accessory_close')
+            yield Static('Bereit. C123 wird ausschließlich gelesen.', id='accessory_status', markup=False)
+            yield Label('MAC-Adressen (Startwert / neu beobachtet)')
+            with Vertical(id='accessory_results'):
+                yield OptionList(id='accessory_list')
+            yield Label('Kopplungsart')
+            yield Select([('Messen und regeln', 0), ('Nur messen', 1)], value=0, allow_blank=False, id='accessory_access')
+            yield Button('Gerät koppeln', id='accessory_pair', disabled=True)
+            yield Label('Abfrageprotokoll')
+            with VerticalScroll(id='accessory_log'):
+                yield Static('', id='accessory_trace', markup=False)
+
+    def action_close(self):
+        if not self.running:
+            self.dismiss()
+
+    def on_button_pressed(self, event):
+        if event.button.id == 'accessory_close':
+            self.action_close()
+        elif event.button.id in ('accessory_start', 'accessory_delete', 'accessory_pair') and not self.running:
+            listing = self.query_one('#accessory_list', OptionList)
+            selected = int(listing.get_option_at_index(listing.highlighted).id) if listing.highlighted is not None else None
+            access = self.query_one('#accessory_access', Select).value
+            if event.button.id == 'accessory_pair' and selected is None:
+                return
+            self.running = True
+            self.query_one('#accessory_start', Button).disabled = True
+            self.query_one('#accessory_close', Button).disabled = True
+            self.query_one('#accessory_type', Select).disabled = True
+            for ident in ('accessory_delete', 'accessory_service', 'accessory_model', 'accessory_pair', 'accessory_list', 'accessory_access'):
+                self.query_one('#' + ident).disabled = True
+            self.run_worker(self.search(delete=event.button.id == 'accessory_delete', pair=selected if event.button.id == 'accessory_pair' else None, access=access), exclusive=True)
+
+    def trace(self, message):
+        self.scan_log.append(f'{datetime.now():%H:%M:%S}  {message}')
+        self.query_one('#accessory_trace', Static).update('\n'.join(self.scan_log))
+        self.query_one('#accessory_log', VerticalScroll).scroll_end(animate=False)
+
+    def show_results(self):
+        listing = self.query_one('#accessory_list', OptionList)
+        previous = (listing.get_option_at_index(listing.highlighted).id
+                    if listing.highlighted is not None else None)
+        listing.clear_options()
+        listing.add_options([Option(f'{n.to_bytes(6, "big").hex(":").upper()}    {stamp}', id=str(n))
+                             for n, stamp in self.results.items()])
+        if self.results:
+            ids = [str(n) for n in self.results]
+            listing.highlighted = ids.index(previous) if previous in ids else 0
+
+    async def search(self, delete=False, pair=None, access=0):
+        import protocol as proto
+        status = self.query_one('#accessory_status', Static)
+        if pair is None:
+            self.results.clear()
+            self.show_results()
+        self.scan_log.clear()
+        self.query_one('#accessory_trace', Static).update('')
+        async def read(noah, reg):
+            reply = await core.receive_reply(noah, proto.query_request([reg]), 12, False, expected_func=proto.FUNC_QUERY)
+            code, values = proto.parse_query_reply(reply)
+            if code != 0 or reg not in values:
+                raise ValueError(f'C{reg}: QUERY-Status {code}, Wert fehlt oder ungültig')
+            return values[reg]
+        try:
+            model = self.TYPES[self.query_one('#accessory_type', Select).value]
+            if model is None:
+                model = (self.query_one('#accessory_service', Input).value.strip(), int(self.query_one('#accessory_model', Input).value))
+            service, kind = model
+            if not re.fullmatch(r'[A-Za-z0-9_.-]{1,17}', service) or not 0 <= kind <= 65535:
+                raise ValueError('Ungültiger mDNS-Dienst oder Typ-ID')
+            command = f'ADD:111-7-{service},{kind}'.encode('ascii')
+            status.update('Verbinde über BLE und lese Ausgangswerte ...')
+            async with core.NoahBle(self.address) as noah:
+                before = await read(noah, 122)
+                self.trace(f'C122 vorher: {before!r}')
+                text = before.decode('ascii').strip(' \r\n\t\x00')
+                if pair is not None:
+                    if pair not in self.results:
+                        raise ValueError('Bitte eine MAC-Adresse auswählen.')
+                    if not text.startswith('DEV:'):
+                        raise ValueError(f'Unbekannte Geräteliste: {text}')
+                    pending = [m.group(1) for entry in text[4:].split('&')
+                               if (m := re.fullmatch(r'(\d+)-7-0,.*', entry))]
+                    if len(pending) != 1:
+                        raise ValueError('Kein eindeutiger Sucheintrag (Status 0); bitte erneut suchen.')
+                    if access not in (0, 1):
+                        raise ValueError('Bitte eine Kopplungsart auswählen.')
+                    mode = 'Messen und regeln' if access == 0 else 'Nur messen'
+                    cmd = f'CRL:{pending[0]}-7-add:sn,{pair}|access,{access}'.encode('ascii')
+                    self.trace(f'C122 SET: {cmd.decode()}')
+                    reply = await core.receive_reply(noah, proto.set_request([(122, cmd)]), 12, False, expected_func=proto.FUNC_SET)
+                    ack = proto.parse_set_reply(reply)
+                    self.trace(f'SET-Status: {ack}')
+                    if ack != 0:
+                        raise ValueError(f'Kopplungsbefehl abgelehnt: {ack}')
+                    for _ in range(6):
+                        await asyncio.sleep(2)
+                        raw = await read(noah, 122)
+                        self.trace(f'C122 nachher: {raw!r}')
+                        for entry in raw.decode('ascii').strip(' \r\n\t\x00').removeprefix('DEV:').split('&'):
+                            match = re.fullmatch(r'(\d+)-7-3,(\d+),([^,]+)', entry)
+                            if match and int(match.group(2)) == pair:
+                                status.update(f'Gerät gekoppelt | IP: {match.group(3)} | {mode} angefordert (nicht rückbestätigt)')
+                                return
+                    status.update('Kopplungsbefehl angenommen; Status 3 noch nicht bestätigt.')
+                    return
+                if delete:
+                    if not text.startswith('DEV:'):
+                        raise ValueError(f'Unbekannte Geräteliste: {text}')
+                    entries = []
+                    for entry in text[4:].split('&'):
+                        match = re.fullmatch(r'(\d+)-7-(\d+),.*', entry)
+                        if match and match.group(2) != '5':
+                            entries.append(match.group(1))
+                    for number in dict.fromkeys(entries):
+                        cmd = f'DEL:{number}-7-{service},{kind}'.encode('ascii')
+                        self.trace(f'C122 SET: {cmd.decode()}')
+                        reply = await core.receive_reply(noah, proto.set_request([(122, cmd)]), 12, False, expected_func=proto.FUNC_SET)
+                        self.trace(f'SET-Status: {proto.parse_set_reply(reply)}')
+                    self.trace(f'C122 nachher: {await read(noah, 122)!r}')
+                    status.update(f'Entkopplung: {len(set(entries))} Löschbefehle gesendet; siehe C122.')
+                    return
+                if text != 'DEV:':
+                    self.trace('Hinweis: C122 enthält bereits Einträge; Suche wird trotzdem gestartet.')
+                raw = await read(noah, 123)
+                last_value = set(core.config_mac_numbers(raw)) - {0}
+                self.results.update({n: 'Startwert (nicht bestätigt)' for n in sorted(last_value)})
+                self.show_results()
+                self.trace(f'C123 Startwert: {raw!r}')
+                self.trace(f'C122 SET: {command.decode()}')
+                reply = await core.receive_reply(noah, proto.set_request([(122, command)]), 12, False, expected_func=proto.FUNC_SET)
+                ack = proto.parse_set_reply(reply)
+                self.trace(f'SET-Status: {ack}')
+                if ack != 0:
+                    raise ValueError(f'Suchbefehl abgelehnt: Status {ack}')
+                start = time.monotonic()
+                count = 0
+                for offset in range(self.INTERVAL, self.DURATION + 1, self.INTERVAL):
+                    await asyncio.sleep(max(0, start + offset - time.monotonic()))
+                    if time.monotonic() > start + self.DURATION + 1:
+                        break
+                    count += 1
+                    status.update(f'Suche: {offset}/{self.DURATION} s | Abfragen: {count} | Treffer: {sum(v.endswith("beobachtet") for v in self.results.values())}')
+                    try:
+                        raw = await read(noah, 123)
+                        value = set(core.config_mac_numbers(raw)) - {0}
+                        changed = value != last_value
+                        for n in sorted(value - last_value):
+                            self.results[n] = datetime.now().strftime('%H:%M:%S') + ' neu beobachtet'
+                        last_value = value
+                        self.trace(f'C123: {raw!r}' + (' [Wechsel]' if changed else ' [unverändert]'))
+                        self.show_results()
+                    except Exception as exc:
+                        self.trace(f'C123 Lesefehler: {exc}')
+                self.trace(f'C122 nachher: {await read(noah, 122)!r}')
+                status.update(f'Suche beendet | Abfragen: {count} | Treffer: {sum(v.endswith("beobachtet") for v in self.results.values())}')
+        except Exception as exc:
+            self.trace(f'Fehler: {exc}')
+            status.update(f'Suche beendet: {exc}')
+        finally:
+            self.running = False
+            self.query_one('#accessory_start', Button).disabled = False
+            self.query_one('#accessory_close', Button).disabled = False
+            self.query_one('#accessory_type', Select).disabled = False
+            for ident in ('accessory_delete', 'accessory_service', 'accessory_model', 'accessory_pair', 'accessory_list', 'accessory_access'):
+                self.query_one('#' + ident).disabled = False
+            self.query_one('#accessory_pair', Button).disabled = not bool(self.results)
 
 
 class WriteConfig(ModalScreen):
@@ -975,6 +1204,15 @@ class NoahTUI(App):
         self.timeslot = 1
         self.columns, self.rows = collect_columns(output, self.layout_entries)
         self._prepare_timeslot_rows()
+        for col, lines in enumerate(self.columns):
+            for idx, line in enumerate(lines):
+                if re.fullmatch(r"Gekoppelte\s+Geräte(?:\s+\[Enter:\s*Auswahl\])?", line.strip().strip("-=─━ ").strip(), re.I):
+                    self.columns[col][idx] = "Gekoppelte Geräte     [Enter: Auswahl]"
+                    self.rows[col].append((idx, ((), "Gekoppelte Geräte", None, "", "A")))
+            self.rows[col].sort(key=lambda item: item[0])
+        # Recompute timeslot row positions after inserting selectable headings.
+        if len(self.rows) > 1 and self.slot_row_indices:
+            self.slot_row_indices = [i for i, (_, e) in enumerate(self.rows[1]) if e[4] == "H" and len(e[0]) == 1 and SLOT_BASE <= e[0][0] < SLOT_BASE + SLOT_FIELDS]
         self.slot_values = self._slot_values_from_table()
         self.column = min(self.column, len(self.columns) - 1)
         for i, rows in enumerate(self.rows):
@@ -1035,13 +1273,16 @@ class NoahTUI(App):
         if min(label_start, unit_start, status_start) < 0:
             raise ValueError('Tabellenspalten nicht erkannt')
         reg_width = label_start - 2
-        label_width = max(11, *(len(item[1][1]) for item in self.rows[col] if item[1][4] != 'S'))
+        label_width = max(11, *(len(item[1][1]) for item in self.rows[col] if item[1][4] not in ('S', 'A')))
         value_start = label_start + label_width + 2
         value_width = unit_start - 2 - value_start
         unit_width = status_start - 2 - unit_start
         if min(reg_width, value_width, unit_width) < 1:
             raise ValueError('Ungültige Spaltenbreiten')
         reg_text = str(regs[0]) if len(regs) == 1 else ','.join(map(str, regs))
+        if entry[4] == 'C':
+            prefix = f'{reg_text:>{reg_width}}  {label:<{label_width}}  '
+            return core.format_config_row(prefix, value, value_width, shown_unit, unit_width, 'OK')
         return (f'{reg_text:>{reg_width}}  {label:<{label_width}}  '
                 f'{str(value):>{value_width}}  {shown_unit:<{unit_width}}  [OK]')
 
@@ -1059,7 +1300,7 @@ class NoahTUI(App):
             label_start = header.find('Bezeichnung')
             unit_start = header.find('Einheit')
             label_width = max(11, *(len(item[1][1]) for item in self.rows[1]
-                                    if item[1][4] != 'S'))
+                                    if item[1][4] not in ('S', 'A')))
             value_start = label_start + label_width + 2
             values = []
             for offset, row_idx in enumerate(self.slot_row_indices):
@@ -1128,6 +1369,43 @@ class NoahTUI(App):
             loading.dismiss()
             self.busy = False
 
+    @staticmethod
+    def accessory_status_display(line, header):
+        """Annotate known WLAN entry states for display only; retain raw table data."""
+        if not re.match(r'^\s*122\s{2,}', line):
+            return line
+        unit_start = header.find('Einheit')
+        if unit_start < 0:
+            return line
+        parts = line.split('\n')
+        # The table retains the decimal identifier and escaped NUL for editing.
+        # Only the rendered WLAN row gets a human-readable MAC and IP.
+        value_end = unit_start - 2
+        for i, part in enumerate(parts):
+            field = part[:value_end]
+            suffix = part[value_end:]
+            if i and re.search(r'(?:DEV:|&|\s)\d+-7-\d+,\s*$', parts[i-1]):
+                match = re.fullmatch(r'\s+(\d{1,15}),', field)
+                if match and int(match.group(1)) < (1 << 48):
+                    mac = ':'.join(f'{b:02X}' for b in int(match.group(1)).to_bytes(6, 'big'))
+                    if len(field) >= len(mac):
+                        field = mac.rjust(len(field))
+            if field.rstrip().endswith(r'\x00'):
+                field = re.sub(r'(\S+)\\x00(\s*)$', lambda m: ' ' * 4 + m.group(1) + m.group(2), field)
+            parts[i] = field + suffix
+        for i, part in enumerate(parts):
+            match = re.search(r'(?:DEV:|&|\s)\d+-7-([035]),', part)
+            if not match:
+                continue
+            # Short labels fit the existing unit/status area.
+            marker = {'0': 'ungekopp.', '3': 'gekoppelt', '5': 'gelöscht'}[match.group(1)]
+            end = header.find('Status', unit_start)
+            if end < 0 or end - unit_start < len(marker):
+                continue
+            if not part[unit_start:end].strip():
+                parts[i] = part[:unit_start].ljust(unit_start) + marker.ljust(end-unit_start) + part[end:]
+        return '\n'.join(parts)
+
     def draw(self):
         for col in range(2):
             lines = self.columns[col] if col < len(self.columns) else []
@@ -1137,7 +1415,8 @@ class NoahTUI(App):
             for idx, line in enumerate(lines):
                 if idx:
                     rendered.append('\n')
-                rendered.append(line, style='reverse bold' if idx == selected and col == self.column else '')
+                shown = self.accessory_status_display(line, lines[0])
+                rendered.append(shown, style='reverse bold' if idx == selected and col == self.column else '')
             # Prevent Rich/Textual from treating section labels in square
             # brackets as markup, and keep each pane in its own viewport.
             self.query_one(f'#table{col}', Static).update(rendered)
@@ -1145,7 +1424,8 @@ class NoahTUI(App):
         if rows:
             selected = rows[self.cursors[self.column]][0]
             pane = self.query_one(f'#pane{self.column}', VerticalScroll)
-            pane.scroll_to(y=max(0, selected - max(1, pane.size.height // 2)), animate=False)
+            physical_row = sum(line.count('\n') + 1 for line in self.columns[self.column][:selected])
+            pane.scroll_to(y=max(0, physical_row - max(1, pane.size.height // 2)), animate=False)
 
     def action_previous(self):
         if self.rows and not self.busy and self.rows[self.column]:
@@ -1172,6 +1452,8 @@ class NoahTUI(App):
             line, entry = self.rows[self.column][self.cursors[self.column]]
             if entry[4] == 'S':
                 self.push_screen(TimeslotSelect(self.timeslot), self.select_timeslot)
+            elif entry[4] == 'A':
+                self.push_screen(AccessorySearch(self.address))
             else:
                 self.push_screen(RegisterDetails(entry, self.columns[self.column][line], self.register_info))
 
@@ -1207,8 +1489,7 @@ class NoahTUI(App):
             col, idx, entry = location
             regs, label, formula, unit, _ = entry
             if typ == 'C':
-                value = actual.decode('ascii', errors='backslashreplace')
-                shown_unit = ''
+                value, shown_unit = core.display_config_value([actual], formula, unit)
             else:
                 # For groups, the single readback cannot reconstruct the displayed
                 # value. Fetch exactly the other members, not the whole table.
@@ -1222,29 +1503,7 @@ class NoahTUI(App):
                     words = [actual]
                 value, shown_unit = core.display_value(words, formula, unit)
             line_idx, _ = self.rows[col][idx]
-            # Reproduce the core reader's fixed-width renderer exactly.
-            # Never infer widths from a previously updated data row.
-            header = self.columns[col][0]
-            label_start = header.find('Bezeichnung')
-            unit_start = header.find('Einheit')
-            status_start = header.find('Status', unit_start)
-            if min(label_start, unit_start, status_start) < 0:
-                raise ValueError('Tabellenspalten nicht erkannt')
-            reg_width = label_start - 2
-            label_width = max(11, *(len(item[1][1]) for item in self.rows[col]))
-            value_start = label_start + label_width + 2
-            value_width = unit_start - 2 - value_start
-            unit_width = status_start - 2 - unit_start
-            if min(reg_width, value_width, unit_width) < 1:
-                raise ValueError('Ungültige Spaltenbreiten')
-            original = self.columns[col][line_idx]
-            reg_text = original[:reg_width].strip()
-            # Use the same format string as noah_registers.py.
-            # Its status field has no fixed right-padding.
-            self.columns[col][line_idx] = (
-                f'{reg_text:>{reg_width}}  {label:<{label_width}}  '
-                f'{str(value):>{value_width}}  {shown_unit:<{unit_width}}  [OK]'
-            )
+            self.columns[col][line_idx] = self._format_row(col, idx, entry, value, shown_unit)
             self.draw()
             self.query_one('#notice', Static).update(
                 f'Register {changed_reg}: Rücklesewert übernommen | Enter: Details und Ändern  R: Alle neu lesen')
@@ -1319,6 +1578,12 @@ class NoahTUI(App):
                 'Schreiben nur für H-Register oder einzelne C-Parameter mit ASCII möglich.')
             return
         displayed = self.columns[self.column][line]
+        if '\n' in displayed:
+            header = self.columns[self.column][0]
+            end = header.find('Einheit') - 2
+            start = header.find('Bezeichnung') + max(11, *(len(item[1][1]) for item in self.rows[self.column] if item[1][4] not in ('S', 'A'))) + 2
+            parts = displayed.splitlines()
+            displayed = parts[0][:start] + ''.join(part[start:end].strip() for part in parts) + parts[-1][end:]
         match = re.search(r'(?<!\S)' + re.escape(label) + r'\s{2,}(.+?)\s{2,}\[OK\]\s*$', displayed)
         if not match:
             self.query_one('#notice', Static).update('Wert nicht eindeutig erkannt. Bitte R neu lesen.')
@@ -1412,8 +1677,8 @@ class NoahTUI(App):
             for col, idx, entry in targets:
                 regs, _, formula, unit, typ = entry
                 if typ == 'C':
-                    value = readings[(typ, regs[0])].decode('ascii', errors='backslashreplace')
-                    shown_unit = ''
+                    value, shown_unit = core.display_config_value(
+                        [readings[(typ, r)] for r in regs], formula, unit)
                 else:
                     value, shown_unit = core.display_value([readings[(typ, r)] for r in regs], formula, unit)
                 line_idx, _ = self.rows[col][idx]
