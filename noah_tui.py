@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""NOAH BLE TUI v0.9.1: cached timeslot editor, keyboard navigation and direct selection.
+"""NOAH BLE TUI v0.9: cached timeslot editor, keyboard navigation and direct selection.
 
 Requires textual, bleak, and the unchanged noah_registers.py,
 protocol.py, growatt_ble.py and registers.txt in the same directory.
@@ -277,8 +277,53 @@ class RegisterDetails(ModalScreen):
         self.app.call_after_refresh(self.app.action_write)
 
 
+class AccessoryDeleteSelect(ModalScreen):
+    """Select an individual live WLAN entry or explicitly delete all."""
+    BINDINGS = [Binding('escape', 'cancel', 'Abbrechen')]
+    CSS = """
+    AccessoryDeleteSelect { align: center middle; background: $background 75%; }
+    #deletebox { width: 82; max-width: 95%; height: auto; max-height: 85%;
+                 border: round $accent; background: $panel; padding: 1 2; }
+    #delete_entries { height: auto; max-height: 15; min-height: 3; }
+    #deletebox Horizontal { height: 3; margin-top: 1; }
+    """
+
+    def __init__(self, entries):
+        super().__init__()
+        self.entries = entries
+
+    def compose(self):
+        with Vertical(id='deletebox'):
+            yield Label('Welchen WLAN-Eintrag möchtest du entkoppeln?')
+            yield OptionList(*[Option(label, id=number) for number, label in self.entries],
+                             id='delete_entries')
+            with Horizontal():
+                yield Button('Auswahl löschen', id='delete_selected', variant='primary')
+                yield Button('Alle löschen', id='delete_all')
+                yield Button('Abbrechen', id='delete_cancel')
+
+    def on_mount(self):
+        listing = self.query_one('#delete_entries', OptionList)
+        listing.highlighted = 0
+        listing.focus()
+
+    def on_button_pressed(self, event):
+        event.stop()
+        if event.button.id == 'delete_cancel':
+            self.dismiss(None)
+        elif event.button.id == 'delete_all':
+            self.dismiss([number for number, _ in self.entries])
+        elif event.button.id == 'delete_selected':
+            listing = self.query_one('#delete_entries', OptionList)
+            if listing.highlighted is not None:
+                self.dismiss([listing.get_option_at_index(listing.highlighted).id])
+
+    def action_cancel(self):
+        self.dismiss(None)
+
+
 class AccessorySearch(ModalScreen):
-    """Experimental WLAN discovery via BLE; never writes C123."""
+    """Experimental WLAN discovery via BLE; C123 reset before discovery, with verified readback."""
     BINDINGS = [Binding('escape', 'close', 'Schließen')]
     CSS = """
     AccessorySearch { align: center middle; background: $background 75%; }
@@ -286,6 +331,11 @@ class AccessorySearch(ModalScreen):
     #accessorybox Horizontal { height: 3; }
     #accessorybox Input { width: 1fr; }
     #accessory_manual_label { margin-top: 1; height: 1; }
+    #accessory_cycle_row { margin-top: 1; }
+    #accessory_cycle_row Label { height: 3; content-align: left middle; }
+    #accessorybox #accessory_cycles { width: 12; min-width: 12; padding: 0 1; }
+    #accessory_cycle_row Button { min-width: 5; width: 5; margin: 0 1; }
+
     #accessory_status { height: auto; min-height: 3; }
     #accessory_results { height: 1fr; min-height: 4; border: solid $accent; }
     #accessory_list { height: 1fr; }
@@ -302,7 +352,7 @@ class AccessorySearch(ModalScreen):
         'Sparky P1': ('_chargee_p1._tcp.', 50),
         'Benutzerdefiniert': None,
     }
-    DURATION = 60
+    DEFAULT_CYCLES = 2
     INTERVAL = 5
 
     def __init__(self, address):
@@ -311,6 +361,7 @@ class AccessorySearch(ModalScreen):
         self.running = False
         self.results = {}
         self.scan_log = []
+        self.readbacks = {}
 
     def compose(self):
         with Vertical(id='accessorybox'):
@@ -320,11 +371,17 @@ class AccessorySearch(ModalScreen):
             with Horizontal():
                 yield Input(value='_http._tcp.', placeholder='mDNS-Dienst', id='accessory_service')
                 yield Input(value='2', placeholder='Typ-ID', id='accessory_model')
+            with Horizontal(id='accessory_cycle_row'):
+                yield Label('Mindestzyklen (2–12, je 5 s): ')
+                yield Button('−', id='accessory_cycle_minus')
+                yield Input(value=str(self.DEFAULT_CYCLES), id='accessory_cycles')
+                yield Button('+', id='accessory_cycle_plus')
             with Horizontal():
                 yield Button('Suche starten', id='accessory_start', variant='primary')
                 yield Button('Gerät entkoppeln', id='accessory_delete')
+                yield Button('C123 leeren', id='accessory_clear')
                 yield Button('Schließen', id='accessory_close')
-            yield Static('Bereit. C123 wird ausschließlich gelesen.', id='accessory_status', markup=False)
+            yield Static('Bereit. C123 wird vor der Suche zurückgesetzt.', id='accessory_status', markup=False)
             yield Label('MAC-Adressen (Startwert / neu beobachtet)')
             with Vertical(id='accessory_results'):
                 yield OptionList(id='accessory_list')
@@ -337,24 +394,42 @@ class AccessorySearch(ModalScreen):
 
     def action_close(self):
         if not self.running:
-            self.dismiss()
+            self.dismiss(dict(self.readbacks))
 
     def on_button_pressed(self, event):
+        if event.button.id in ('accessory_cycle_minus', 'accessory_cycle_plus'):
+            if not self.running:
+                field = self.query_one('#accessory_cycles', Input)
+                try:
+                    value = int(field.value)
+                except ValueError:
+                    value = self.DEFAULT_CYCLES
+                field.value = str(max(2, min(12, value + (1 if event.button.id.endswith('plus') else -1))))
+            return
         if event.button.id == 'accessory_close':
             self.action_close()
-        elif event.button.id in ('accessory_start', 'accessory_delete', 'accessory_pair') and not self.running:
+        elif event.button.id in ('accessory_start', 'accessory_delete', 'accessory_pair', 'accessory_clear') and not self.running:
             listing = self.query_one('#accessory_list', OptionList)
             selected = int(listing.get_option_at_index(listing.highlighted).id) if listing.highlighted is not None else None
             access = self.query_one('#accessory_access', Select).value
             if event.button.id == 'accessory_pair' and selected is None:
                 return
+            cycles = self.DEFAULT_CYCLES
+            if event.button.id == 'accessory_start':
+                try:
+                    cycles = int(self.query_one('#accessory_cycles', Input).value)
+                    if not 2 <= cycles <= 12:
+                        raise ValueError
+                except ValueError:
+                    self.query_one('#accessory_status', Static).update('Bitte 2 bis 12 Abfragezyklen eingeben.')
+                    return
             self.running = True
             self.query_one('#accessory_start', Button).disabled = True
             self.query_one('#accessory_close', Button).disabled = True
             self.query_one('#accessory_type', Select).disabled = True
-            for ident in ('accessory_delete', 'accessory_service', 'accessory_model', 'accessory_pair', 'accessory_list', 'accessory_access'):
+            for ident in ('accessory_delete', 'accessory_clear', 'accessory_service', 'accessory_model', 'accessory_cycles', 'accessory_cycle_minus', 'accessory_cycle_plus', 'accessory_pair', 'accessory_list', 'accessory_access'):
                 self.query_one('#' + ident).disabled = True
-            self.run_worker(self.search(delete=event.button.id == 'accessory_delete', pair=selected if event.button.id == 'accessory_pair' else None, access=access), exclusive=True)
+            self.run_worker(self.search(delete=event.button.id == 'accessory_delete', pair=selected if event.button.id == 'accessory_pair' else None, access=access, clear=event.button.id == 'accessory_clear', cycles=cycles), exclusive=True)
 
     def trace(self, message):
         self.scan_log.append(f'{datetime.now():%H:%M:%S}  {message}')
@@ -372,7 +447,7 @@ class AccessorySearch(ModalScreen):
             ids = [str(n) for n in self.results]
             listing.highlighted = ids.index(previous) if previous in ids else 0
 
-    async def search(self, delete=False, pair=None, access=0):
+    async def search(self, delete=False, pair=None, access=0, clear=False, cycles=2):
         import protocol as proto
         status = self.query_one('#accessory_status', Static)
         if pair is None:
@@ -385,8 +460,35 @@ class AccessorySearch(ModalScreen):
             code, values = proto.parse_query_reply(reply)
             if code != 0 or reg not in values:
                 raise ValueError(f'C{reg}: QUERY-Status {code}, Wert fehlt oder ungültig')
+            self.readbacks[('C', reg)] = values[reg]
             return values[reg]
+        async def meter_readback(noah):
+            for reg in (310, 311, 313):
+                try:
+                    self.readbacks[('H', reg)] = await core.read_one(noah, 3, reg, 12, False)
+                    self.trace(f'H{reg}: {self.readbacks[("H", reg)]}')
+                except Exception as exc:
+                    self.trace(f'H{reg} Lesefehler: {exc}')
+        async def reset_list(noah):
+            self.trace('C123 SET: ASCII 0 (hex 30)')
+            self.readbacks.pop(('C', 123), None)
+            reply = await core.receive_reply(noah, proto.set_request([(123, b'0')]), 12, False, expected_func=proto.FUNC_SET)
+            ack = proto.parse_set_reply(reply)
+            self.trace(f'SET-Status: {ack}')
+            raw = await read(noah, 123)
+            self.trace(f'C123 nachher: {raw!r}')
+            return ack, raw
         try:
+            if clear:
+                status.update('Experiment: C123 auf ASCII 0 setzen ...')
+                async with core.NoahBle(self.address) as noah:
+                    self.trace(f'C123 vorher: {await read(noah, 123)!r}')
+                    ack, raw = await reset_list(noah)
+                    if ack == 0 and raw.strip(b' \r\n\t\x00') == b'0':
+                        status.update('C123 auf 0 gesetzt und rückgelesen.')
+                    else:
+                        status.update(f'C123 Reset nicht bestätigt | SET: {ack} | QUERY: {raw!r}')
+                return
             model = self.TYPES[self.query_one('#accessory_type', Select).value]
             if model is None:
                 model = (self.query_one('#accessory_service', Input).value.strip(), int(self.query_one('#accessory_model', Input).value))
@@ -404,14 +506,15 @@ class AccessorySearch(ModalScreen):
                         raise ValueError('Bitte eine MAC-Adresse auswählen.')
                     if not text.startswith('DEV:'):
                         raise ValueError(f'Unbekannte Geräteliste: {text}')
-                    pending = [m.group(1) for entry in text[4:].split('&')
-                               if (m := re.fullmatch(r'(\d+)-7-0,.*', entry))]
+                    pending = [number for number, mode, state, _, _ in core.parse_wlan_entries(before)
+                               if mode == '7' and state == '0']
                     if len(pending) != 1:
                         raise ValueError('Kein eindeutiger Sucheintrag (Status 0); bitte erneut suchen.')
                     if access not in (0, 1):
                         raise ValueError('Bitte eine Kopplungsart auswählen.')
                     mode = 'Messen und regeln' if access == 0 else 'Nur messen'
                     cmd = f'CRL:{pending[0]}-7-add:sn,{pair}|access,{access}'.encode('ascii')
+                    self.readbacks.pop(('C', 122), None)
                     self.trace(f'C122 SET: {cmd.decode()}')
                     reply = await core.receive_reply(noah, proto.set_request([(122, cmd)]), 12, False, expected_func=proto.FUNC_SET)
                     ack = proto.parse_set_reply(reply)
@@ -426,46 +529,84 @@ class AccessorySearch(ModalScreen):
                             match = re.fullmatch(r'(\d+)-7-3,(\d+),([^,]+)', entry)
                             if match and int(match.group(2)) == pair:
                                 status.update(f'Gerät gekoppelt | IP: {match.group(3)} | {mode} angefordert (nicht rückbestätigt)')
+                                await meter_readback(noah)
                                 return
                     status.update('Kopplungsbefehl angenommen; Status 3 noch nicht bestätigt.')
                     return
                 if delete:
                     if not text.startswith('DEV:'):
                         raise ValueError(f'Unbekannte Geräteliste: {text}')
-                    entries = []
-                    for entry in text[4:].split('&'):
-                        match = re.fullmatch(r'(\d+)-7-(\d+),.*', entry)
-                        if match and match.group(2) != '5':
-                            entries.append(match.group(1))
-                    for number in dict.fromkeys(entries):
+                    entries = {}
+                    for number, mode, state, name, ip in sorted(core.parse_wlan_entries(before), key=lambda e: int(e[0])):
+                        if mode != '7' or state == '5':
+                            continue
+                        name = core.wlan_display_name(mode, name)
+                        state_label = {'0': 'ungekoppelt', '3': 'gekoppelt'}.get(state, f'Status {state}')
+                        entries[number] = f'{number}  {name or "–"}  {ip or "–"}  {state_label}'
+                    if not entries:
+                        status.update('Keine aktiven WLAN-Einträge vorhanden.')
+                        return
+                    selected_entries = await self.app.push_screen_wait(AccessoryDeleteSelect(list(entries.items())))
+                    if not selected_entries:
+                        status.update('Entkopplung abgebrochen.')
+                        return
+                    # Re-read after the selection; do not delete a changed/reused entry.
+                    current = await read(noah, 122)
+                    if current != before:
+                        status.update('Geräteliste hat sich geändert. Bitte erneut auswählen.')
+                        return
+                    accepted = 0
+                    for number in selected_entries:
                         cmd = f'DEL:{number}-7-{service},{kind}'.encode('ascii')
+                        self.readbacks.pop(('C', 122), None)
                         self.trace(f'C122 SET: {cmd.decode()}')
                         reply = await core.receive_reply(noah, proto.set_request([(122, cmd)]), 12, False, expected_func=proto.FUNC_SET)
-                        self.trace(f'SET-Status: {proto.parse_set_reply(reply)}')
-                    self.trace(f'C122 nachher: {await read(noah, 122)!r}')
-                    status.update(f'Entkopplung: {len(set(entries))} Löschbefehle gesendet; siehe C122.')
+                        ack = proto.parse_set_reply(reply)
+                        self.trace(f'SET-Status: {ack}')
+                        accepted += ack == 0
+                    confirmed = set()
+                    for _ in range(6):
+                        await asyncio.sleep(2)
+                        raw = await read(noah, 122)
+                        self.trace(f'C122 nachher: {raw!r}')
+                        if not raw.startswith(b'DEV:'):
+                            raise ValueError(f'Unbekannte Geräteliste: {raw!r}')
+                        states = {m.group(1): m.group(2) for entry in raw.decode('ascii').strip(' \r\n\t\x00').removeprefix('DEV:').split('&')
+                                  if (m := re.fullmatch(r'(\d+)-7-(\d+),.*', entry))}
+                        confirmed = {number for number in selected_entries if states.get(number) in (None, '5')}
+                        if len(confirmed) == len(selected_entries):
+                            break
+                    await meter_readback(noah)
+                    status.update(f'Entkopplung: {accepted}/{len(selected_entries)} angenommen; {len(confirmed)}/{len(selected_entries)} gelöscht bestätigt.')
                     return
                 if text != 'DEV:':
                     self.trace('Hinweis: C122 enthält bereits Einträge; Suche wird trotzdem gestartet.')
-                raw = await read(noah, 123)
+                try:
+                    ack, raw = await reset_list(noah)
+                    if ack != 0 or raw.strip(b' \r\n\t\x00') != b'0':
+                        self.trace('C123 Reset nicht bestätigt; vorhandene Startwerte bleiben unbestätigt.')
+                except Exception as exc:
+                    self.trace(f'C123 Reset fehlgeschlagen: {exc}; lese Startwert erneut.')
+                    raw = await read(noah, 123)
                 last_value = set(core.config_mac_numbers(raw)) - {0}
                 self.results.update({n: 'Startwert (nicht bestätigt)' for n in sorted(last_value)})
                 self.show_results()
                 self.trace(f'C123 Startwert: {raw!r}')
+                self.readbacks.pop(('C', 122), None)
                 self.trace(f'C122 SET: {command.decode()}')
                 reply = await core.receive_reply(noah, proto.set_request([(122, command)]), 12, False, expected_func=proto.FUNC_SET)
                 ack = proto.parse_set_reply(reply)
                 self.trace(f'SET-Status: {ack}')
                 if ack != 0:
                     raise ValueError(f'Suchbefehl abgelehnt: Status {ack}')
+                target = cycles
                 start = time.monotonic()
                 count = 0
-                for offset in range(self.INTERVAL, self.DURATION + 1, self.INTERVAL):
+                while count < target:
+                    offset = (count + 1) * self.INTERVAL
                     await asyncio.sleep(max(0, start + offset - time.monotonic()))
-                    if time.monotonic() > start + self.DURATION + 1:
-                        break
                     count += 1
-                    status.update(f'Suche: {offset}/{self.DURATION} s | Abfragen: {count} | Treffer: {sum(v.endswith("beobachtet") for v in self.results.values())}')
+                    status.update(f'Suche: {offset}/{target * self.INTERVAL} s | Abfragen: {count} | Treffer: {sum(v.endswith("beobachtet") for v in self.results.values())}')
                     try:
                         raw = await read(noah, 123)
                         value = set(core.config_mac_numbers(raw)) - {0}
@@ -475,10 +616,20 @@ class AccessorySearch(ModalScreen):
                         last_value = value
                         self.trace(f'C123: {raw!r}' + (' [Wechsel]' if changed else ' [unverändert]'))
                         self.show_results()
+                        if count == target and changed and target < 12:
+                            target += 1
+                            self.trace(f'C123 geändert: verlängere auf {target} Zyklen.')
+                        elif count == target and changed:
+                            self.trace('Maximale Beobachtungsdauer (12 Zyklen) erreicht.')
                     except Exception as exc:
                         self.trace(f'C123 Lesefehler: {exc}')
+                        if count == target and target < 12:
+                            target += 1
+                            self.trace(f'Letzte Abfrage fehlgeschlagen: verlängere auf {target} Zyklen.')
                 self.trace(f'C122 nachher: {await read(noah, 122)!r}')
-                status.update(f'Suche beendet | Abfragen: {count} | Treffer: {sum(v.endswith("beobachtet") for v in self.results.values())}')
+                if count < 12:
+                    self.trace('BLE-Polling beendet; interne mDNS-Suche kann noch laufen.')
+                status.update(f'Polling beendet | Abfragen: {count} | Treffer: {sum(v.endswith("beobachtet") for v in self.results.values())}')
         except Exception as exc:
             self.trace(f'Fehler: {exc}')
             status.update(f'Suche beendet: {exc}')
@@ -487,7 +638,7 @@ class AccessorySearch(ModalScreen):
             self.query_one('#accessory_start', Button).disabled = False
             self.query_one('#accessory_close', Button).disabled = False
             self.query_one('#accessory_type', Select).disabled = False
-            for ident in ('accessory_delete', 'accessory_service', 'accessory_model', 'accessory_pair', 'accessory_list', 'accessory_access'):
+            for ident in ('accessory_delete', 'accessory_clear', 'accessory_service', 'accessory_model', 'accessory_cycles', 'accessory_cycle_minus', 'accessory_cycle_plus', 'accessory_pair', 'accessory_list', 'accessory_access'):
                 self.query_one('#' + ident).disabled = False
             self.query_one('#accessory_pair', Button).disabled = not bool(self.results)
 
@@ -1377,34 +1528,39 @@ class NoahTUI(App):
         unit_start = header.find('Einheit')
         if unit_start < 0:
             return line
-        parts = line.split('\n')
-        # The table retains the decimal identifier and escaped NUL for editing.
-        # Only the rendered WLAN row gets a human-readable MAC and IP.
         value_end = unit_start - 2
-        for i, part in enumerate(parts):
-            field = part[:value_end]
-            suffix = part[value_end:]
-            if i and re.search(r'(?:DEV:|&|\s)\d+-7-\d+,\s*$', parts[i-1]):
-                match = re.fullmatch(r'\s+(\d{1,15}),', field)
-                if match and int(match.group(1)) < (1 << 48):
-                    mac = ':'.join(f'{b:02X}' for b in int(match.group(1)).to_bytes(6, 'big'))
-                    if len(field) >= len(mac):
-                        field = mac.rjust(len(field))
-            if field.rstrip().endswith(r'\x00'):
-                field = re.sub(r'(\S+)\\x00(\s*)$', lambda m: ' ' * 4 + m.group(1) + m.group(2), field)
-            parts[i] = field + suffix
-        for i, part in enumerate(parts):
-            match = re.search(r'(?:DEV:|&|\s)\d+-7-([035]),', part)
-            if not match:
-                continue
-            # Short labels fit the existing unit/status area.
-            marker = {'0': 'ungekopp.', '3': 'gekoppelt', '5': 'gelöscht'}[match.group(1)]
-            end = header.find('Status', unit_start)
-            if end < 0 or end - unit_start < len(marker):
-                continue
-            if not part[unit_start:end].strip():
-                parts[i] = part[:unit_start].ljust(unit_start) + marker.ljust(end-unit_start) + part[end:]
-        return '\n'.join(parts)
+        status_start = header.find('Status', unit_start)
+        if status_start < 0:
+            return line
+        parts = line.split('\n')
+        start = parts[0].find('DEV:')
+        if start < 0 or start >= value_end:
+            return line
+        # Reassemble the original wrapped value, excluding unit/status columns.
+        raw = parts[0][start:value_end].strip() + ''.join(
+            part[:value_end].strip() for part in parts[1:])
+        try:
+            entries = sorted(core.parse_wlan_entries(raw), key=lambda e: int(e[0]))
+        except (ValueError, UnicodeError):
+            return line
+        if not entries:
+            return line
+        prefix = parts[0][:start].rstrip()
+        suffix = parts[-1][status_start-2:]
+        output = []
+        for i, (number, mode, state, name, ip) in enumerate(entries):
+            if i:
+                output.append('')
+            title = ('DEV:' if i == 0 else '') + f'{number}-{mode}-{state}'
+            marker = {'0': 'ungekopp.', '3': 'gekoppelt', '5': 'gelöscht'}.get(state, f'Status {state}') if mode == '7' else ''
+            if len(prefix) + 2 + len(title) > value_end and i == 0:
+                return line
+            output.append((prefix if i == 0 else '').ljust(value_end-len(title)) + title + '  ' + marker)
+            for field in (core.wlan_display_name(mode, name), ip):
+                if field:
+                    output.append(field.rjust(value_end))
+        output[-1] = output[-1].ljust(status_start-2) + suffix
+        return '\n'.join(output)
 
     def draw(self):
         for col in range(2):
@@ -1424,7 +1580,7 @@ class NoahTUI(App):
         if rows:
             selected = rows[self.cursors[self.column]][0]
             pane = self.query_one(f'#pane{self.column}', VerticalScroll)
-            physical_row = sum(line.count('\n') + 1 for line in self.columns[self.column][:selected])
+            physical_row = sum(self.accessory_status_display(line, self.columns[self.column][0]).count('\n') + 1 for line in self.columns[self.column][:selected])
             pane.scroll_to(y=max(0, physical_row - max(1, pane.size.height // 2)), animate=False)
 
     def action_previous(self):
@@ -1453,9 +1609,33 @@ class NoahTUI(App):
             if entry[4] == 'S':
                 self.push_screen(TimeslotSelect(self.timeslot), self.select_timeslot)
             elif entry[4] == 'A':
-                self.push_screen(AccessorySearch(self.address))
+                self.push_screen(AccessorySearch(self.address), self.on_accessory_closed)
             else:
                 self.push_screen(RegisterDetails(entry, self.columns[self.column][line], self.register_info))
+
+    def on_accessory_closed(self, readings):
+        if not readings or not self.rows:
+            return
+        updated = 0
+        errors = []
+        for col, rows in enumerate(self.rows):
+            for idx, (line_idx, entry) in enumerate(rows):
+                regs, label, formula, unit, typ = entry
+                if typ not in ('C', 'H') or not regs or not all((typ, r) in readings for r in regs):
+                    continue
+                try:
+                    values = [readings[(typ, r)] for r in regs]
+                    formatter = core.display_config_value if typ == 'C' else core.display_value
+                    value, shown_unit = formatter(values, formula, unit)
+                    self.columns[col][line_idx] = self._format_row(col, idx, entry, value, shown_unit)
+                    updated += 1
+                except Exception as exc:
+                    errors.append(f'{label}: {exc}')
+        self.draw()
+        notice = f'Zubehör: {updated} Registerzeilen aktualisiert'
+        if errors:
+            notice += ' | ' + '; '.join(errors)
+        self.query_one('#notice', Static).update(notice)
 
     def on_timeslot_written(self, result):
         if result is not None:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Experimental Growatt NOAH BLE register diagnostic (v0.8).
+"""Experimental Growatt NOAH BLE register diagnostic (v0.7).
 
 Requires the unmodified protocol.py and growatt_ble.py from the watchdog project.
 Based on the unofficial NEXA/NOAH protocol specification, section 8.10.
@@ -18,6 +18,28 @@ import protocol as p
 from growatt_ble import NoahBle
 
 REGISTER_FILE = Path(__file__).resolve().parent / 'registers.txt'
+
+
+def parse_wlan_entries(raw):
+    """Parse C122 without changing wire order or identifiers; reject unknown syntax."""
+    if isinstance(raw, bytes):
+        raw = raw.decode('ascii')
+    raw = raw.strip(' \r\n\t\x00').removesuffix(r'\x00')
+    if not raw.startswith('DEV:'):
+        raise ValueError('Unbekannte Geräteliste')
+    entries = []
+    for item in raw[4:].split('&') if raw[4:] else []:
+        match = re.fullmatch(r'(\d+)-(\d+)-(\d+),([^,]*),([^,]*)', item)
+        if not match:
+            raise ValueError(f'Unbekannter Geräteeintrag: {item}')
+        entries.append(match.groups())
+    return entries
+
+
+def wlan_display_name(mode, name):
+    if mode == '7' and re.fullmatch(r'[0-9]+', name) and int(name) < 2**48:
+        return int(name).to_bytes(6, 'big').hex(':').upper()
+    return name
 
 
 def format_config_row(prefix, value, value_width, unit, unit_width, status):
@@ -425,7 +447,8 @@ def display_config_value(values, formula, unit):
         if formula == 'RAWHEX':
             chunks.append(raw.hex(' ').upper())
         elif formula == 'MAC':
-            chunks.append(' & '.join(n.to_bytes(6, 'big').hex(':').upper() for n in config_mac_numbers(raw)))
+            numbers = [n for n in config_mac_numbers(raw) if n != 0]
+            chunks.append(' & '.join(n.to_bytes(6, 'big').hex(':').upper() for n in numbers) if numbers else 'Keine Suchergebnisse')
         elif formula == 'HEX':
             text = raw.decode('ascii').strip()
             if not re.fullmatch(r'[0-9]+', text):
