@@ -1,11 +1,11 @@
-# Growatt BLE Tools – NOAH Register Reader & Terminal Interface
+# Growatt NOAH – BLE Register Diagnostics and Terminal Interface
 
-**Updated: November 25, 2026**  
-**`noah_registers.py` v0.8 · `noah_tui.py` v0.91**
+**Updated: November 26, 2026**  
+**`noah_registers.py` v0.8.2 · `noah_tui.py` v0.9.7**
 
 Two Python applications for reading and diagnosing Growatt NOAH battery systems directly over Bluetooth Low Energy (BLE):
 
-- **`noah_registers.py`**: Command-line utility for device discovery, manual register reads/writes, register lists, and configuration queries.
+- **`noah_registers.py`**: Command-line utility for device discovery, individual reads, register lists, and diagnostics.
 - **`noah_tui.py`**: Interactive Textual-based terminal interface with device management, a two-column register display, detail views, and selected write operations.
 
 Both applications use the existing `protocol.py` and `growatt_ble.py` modules. BLE access does not require the Growatt cloud or MQTT. This project is **unofficial and experimental**; in particular, register meanings and write operations have not been approved by Growatt for this use.
@@ -24,17 +24,15 @@ Place these files in the same project directory:
 
 ```text
 project/
-├── noah_registers.py       # v0.8
-├── noah_tui.py             # v0.91
+├── noah_registers.py       # v0.8.2
+├── noah_tui.py             # v0.9.7
 ├── protocol.py             # BLE protocol module
 ├── growatt_ble.py          # BLE device communication
 ├── registers.txt           # Register selection, conversion, layout
 ├── register_info.txt       # Optional explanations in the detail view
-├── noah_devices.txt        # Device list managed by the TUI
-└── docs/README_noah_ble_tools.md  # This guide (German: _DE.md)
+└── noah_devices.txt        # Device list managed by the TUI
 ```
 
-**Note on versioned filenames:** Rename any versioned register-reader and TUI files to `noah_registers.py` and `noah_tui.py` before running them. The TUI explicitly imports `noah_registers`.
 
 ## 2. Quick Start
 
@@ -80,7 +78,7 @@ python noah_registers.py read --address 'AA:BB:CC:DD:EE:FF' --type input --regis
 python noah_registers.py read --address 'AA:BB:CC:DD:EE:FF' --type holding --register 254 --count 5
 ```
 
-Running `noah_registers.py` without a subcommand opens the interactive menu (options 1–4: register list, manual register read/write, datalogger restart, configuration query). The former diagnostic test menu items 5–8 were removed from v0.7; the optimized read windows remain in regular use.
+Running `noah_registers.py` without a subcommand opens its interactive diagnostics menu.
 
 ## 3. Register Types and Transport
 
@@ -141,9 +139,7 @@ The current mixed-source syntax specifically supports `I,C` and `H,C`, each with
 | `1`, `0.1`, `0.01` | Multiply the raw value |
 | `*0.1 -273.1` | Arithmetic conversion |
 | `ASCII` | Interpret 16-bit words as ASCII, or a C parameter as a string |
-| `HEX` | I/H: hexadecimal bytes; C: decimal ASCII number converted to hexadecimal |
-| `RAWHEX` | C only: raw payload bytes in hexadecimal |
-| `MAC` | C only: decimal 48-bit identifiers as colon-separated MAC addresses; supports `&`-separated lists |
+| `HEX` | Display bytes in hexadecimal |
 | `TIME` | Time encoded as high byte (hours) and low byte (minutes) |
 | `bit3-0` | Display selected bits as a bit sequence |
 | `CombLBHBLB` | Combine selected bytes from multiple 16-bit words |
@@ -188,18 +184,6 @@ Standalone lines enclosed in double asterisks control the display:
 
 `**SPALTE**` or `**SEITENUMBRUCH**` starts a new display column. These directive keywords remain in German because they are part of the parser syntax. Headings and separators do not trigger register reads.
 
-### Targeted Refresh Groups (F1–F8)
-
-Optional `[F1]` through `[F8]` sections in `registers.txt` specify existing entries to refresh without reloading the complete table. Each selector uses `Register[,Register...]|Exact display label`. For example:
-
-```text
-[F1]
-13|SOC Total
-29,41,53,65|SOC Bat.1-4
-```
-
-Group selectors are not additional register definitions. Press the matching function key to refresh the configured measurements. If a group is absent, the TUI reports that no group is configured.
-
 ## 5. TUI Controls
 
 | Key | Action |
@@ -208,19 +192,12 @@ Group selectors are not additional register definitions. Press the matching func
 | `←` / `→` | Select left / right column |
 | `Enter` | Show details for the selected entry |
 | `R` | Refresh all registers |
-| `F1`–`F8` | Refresh the corresponding configured register group |
 | `G` | Switch device |
 | `K` | Open device management |
 | `N` | Trigger datalogger restart (**active operation**) |
 | `Q` | Quit or close the current dialog |
 
-The TUI reads registers through `noah_registers.py`, displays the results in two columns, and opens a detail view with Enter. Selecting the timeslot heading allows switching between nine timeslots. The optional `register_info.txt` adds explanatory notes under section headings such as `[I:120]`, `[H:254]`, or `[C:21]`.
-
-### Fast Holding-Register Editor (v0.9)
-
-For single holding registers with an unambiguous raw table value (such as H:250 charge limit, H:251 discharge limit, and H:252 default output power), the editor **prefills immediately from the already displayed table**. It does **not** open a new BLE connection to read the value when the dialog opens and does **not** perform a pre-write read. After submitting, it writes via Modbus FC06 and verifies the result with a single FC03 readback. The verified value updates the table. If the display is scaled or cannot safely be interpreted as a raw value, manual entry may be required; never assume a scaled value is the register's raw value.
-
-The timeslot editor likewise reuses values from the current table where possible; each of the nine timeslots comprises five holding registers. Timeslot changes use FC16 and FC03 verification. ASCII configuration writes use Growatt SET and QUERY for verification.
+The TUI reads registers through `noah_registers.py`, displays the results in two columns, and opens a detail view with Enter. The optional `register_info.txt` adds explanatory notes under section headings such as `[I:120]`, `[H:254]`, or `[C:21]`.
 
 ### Write Operations – Use Caution
 
@@ -228,64 +205,30 @@ The TUI includes experimental functions for modifying individual holding registe
 
 The combined `I,C` firmware entry is **read-only**. Never send untested write values to a device: changes to operating modes, output power, schedules, or communications can affect operation immediately.
 
-### WLAN Smart Meter Discovery and Pairing (v0.91)
+### WLAN accessory management (experimental)
 
-The TUI can discover, pair and unpair supported WLAN smart meters directly through the NOAH datalogger over BLE, without ShinePhone or a Growatt server connection. The NOAH and meter must be reachable on the local network; BLE is used to configure the NOAH, not to communicate directly with the meter.
+Open the **Gekoppelte Geräte** (paired devices) section with Enter. The NOAH itself discovers WLAN accessories via mDNS; the computer controls discovery and pairing over BLE. No ShinePhone or cloud connection is required for these operations.
 
-Add the following entries to `registers.txt` (the German heading is a recognized TUI directive and must not be translated):
+- Select an accessory model (Shelly Pro 3EM by default) or enter a custom mDNS service and type ID. Other presets include Shelly 3EM, Pro 3EM-3CT63, Pro EM-50, Pro 1PM, everHome EcoTracker and Sparky P1; these alternatives have not been validated in this test.
+- Set 2–12 minimum polling cycles using the input or −/+ buttons. Each cycle is five seconds. A change in the final MAC set or a final read error extends polling by one cycle, up to 12 cycles total. The NOAH's internal discovery may continue after BLE polling ends.
+- C123 is experimentally reset to ASCII `0` before discovery, with readback verification. A separate clear button is available. If reset fails, existing addresses are not treated as confirmed new discoveries.
+- Select a discovered MAC and pairing mode: `access,0` (measure and regulate) or `access,1` (measure only). Pairing is verified using C122 state 3; the requested access mode is not independently confirmed.
+- Selectively delete an individual WLAN entry, including an unpaired entry, or explicitly delete all entries. Deletion is checked against C122. Relevant readbacks update the main table without requiring a full refresh.
+- C122 entries are sorted by entry number and displayed in separate blocks with hexadecimal MAC, IP and state. Raw protocol data remains available for diagnosis.
 
-```text
-**[Gekoppelte Geräte]**
-102|RF-Geräteliste|ASCII||C
-122|WLAN-Geräteliste|ASCII||C
-123|Mac-Addr.|MAC||C
-143|Routed Modbus|1||C
-313|Anzahl Zubehörgeräte|1||H
-310|Einspeiseleistung Messeinrichtung|1|W|H
-311|Bezugsleistung Messeinrichtung|1|W|H
-```
+| Register | Meaning |
+|---|---|
+| C102 | RF accessory list |
+| C122 | WLAN accessory entries and commands |
+| C123 | Discovery MAC list |
+| C143 | Routed Modbus; not required for the tested WLAN pairing |
+| H310 | Export power magnitude (W; direction mapping not yet tested on NOAH with negative power) |
+| H311 | Import power (W; verified) |
+| H313 | Accessory count; remained zero in WLAN tests |
 
-Select **Gekoppelte Geräte [Enter: Auswahl]** and press Enter. Select a meter type (default: Shelly Pro 3EM), then **Suche starten**. The selectable results list displays full MAC addresses and timestamps. Choose a result and the pairing mode, then press **Gerät koppeln**. Use **Gerät entkoppeln** to send deletion commands for all non-deleted mode-7 entries, not just the highlighted search result. No automatic unpairing or datalogger restart is performed before a search. Searching while already paired may interfere with an existing connection.
+C122 uses `DEV:<entry>-<mode>-<state>,<name>,<address>` with `&` between entries. Mode 7 denotes WLAN discovery; states 0, 3 and 5 indicate unpaired, paired and deleted respectively. Deleted entries can retain MAC/IP data. Example commands: `ADD:111-7-_http._tcp.,2`, `CRL:112-7-add:sn,80225394980980|access,1`, `DEL:112-7-_http._tcp.,2`. Use the actual entry number for pairing/deletion.
 
-| Meter type | mDNS service | Type ID |
-|---|---|---:|
-| Shelly 3EM | `_http._tcp.` | 1 |
-| Shelly Pro 3EM | `_http._tcp.` | 2 |
-| Shelly Pro 3EM 3CT63 | `_http._tcp.` | 8 |
-| Shelly Pro EM 50 | `_http._tcp.` | 7 |
-| Shelly Pro 1PM | `_http._tcp.` | 6 |
-| Everhome Ecotracker | `_everhome._tcp.` | 3 |
-| Sparky P1 | `_chargee_p1._tcp.` | 50 |
-
-The custom option (`Benutzerdefiniert`) accepts a service name and type ID. These presets are derived from Heliobridge; practical NOAH testing has so far used two Shelly Pro 3EM emulators (Tasmota), not every listed model.
-
-#### Protocol and search behavior
-
-C122 uses Growatt SET (`0x18`) and QUERY (`0x19`). Example commands (ASCII payloads):
-
-```text
-ADD:111-7-_http._tcp.,2
-CRL:111-7-add:sn,80225394980980|access,0
-DEL:111-7-_http._tcp.,2
-```
-
-`111` is an example entry number; pairing and deletion use the actual number returned by C122. `access,0` requests measurement and regulation (default); `access,1` requests measurement only. Pairing is verified by reading C122 and checking status 3 and the selected MAC. The access mode itself is not independently confirmed by C122. Measurement with `access,1` has been observed; absence of regulation has not been independently verified.
-
-C123 contains decimal 48-bit MAC identifiers, possibly separated by `&`. The TUI reads a baseline, then polls C123 at five-second intervals for a nominal 60 seconds. Existing addresses are marked `Startwert (nicht bestätigt)`; newly observed addresses receive a timestamp. Unchanged cached results cannot be distinguished from rediscovery. C123 is only read by the discovery workflow; C143 is not modified.
-
-Unlike Heliobridge's server-side push mechanism, BLE polling is used here. In a passive test on November 25, 2026, the only notification during 65 seconds after ADD was the SET acknowledgement. A subsequent QUERY returned both MAC addresses. No unsolicited C123 report was observed under these conditions; the test did not read a baseline, so it cannot alone prove that those addresses were newly discovered.
-
-#### Register display and meter readings
-
-| C122 state | TUI label | Meaning |
-|---|---|---|
-| 0 | `ungekopp.` | Registered, not paired |
-| 3 | `gekoppelt` | Paired |
-| 5 | `gelöscht` | Deleted entry retained in the list |
-
-C122 displays decimal MAC identifiers in colon-separated hexadecimal notation and hides the trailing NUL in the overview. C123 can display multiple full MAC addresses on separate lines. Raw register data remains available for manual inspection. The `[OK]` indicator denotes a successful read, not a successful pairing. Navigation to the accessory heading was corrected in the latest TUI revision.
-
-H310 and H311 are separate unsigned 16-bit power magnitudes in watts (export and import respectively, based on related NEXA documentation and NOAH observations). Net power is `H311 - H310`. Import readings were confirmed on NOAH; export direction remains to be verified experimentally. H313 may remain zero despite an active WLAN pairing and should not be used alone to determine pairing status.
+**Important firmware observation:** On two tested NOAHs, starting another discovery with an existing paired meter created an unpaired entry and subsequently interrupted meter readings. Readings did not recover merely by waiting. Selectively deleting the unpaired entry restored readings without deleting the working pairing. Pairing the second entry also restored readings. With two paired meters, H311 displayed the value of entry 112 in the observed test, not the sum. Which meter controls output, and whether `access,1` reliably excludes it from regulation, remain unverified. A zero reading alone is not proof of a fault. This may explain some unsuccessful app pairing scenarios, but that connection has not been demonstrated.
 
 ## 6. CLI Options
 
@@ -315,13 +258,11 @@ The `list` command supports options including `--timeout`, `--block-size` (defau
 
 ## 8. Project Status and Limitations
 
-BLE register reads, including the optimized input windows, have previously been used successfully on **four NOAH devices**. The current NOAH workflow, including fast holding-register prefilling and post-write verification, has been tested by the project maintainer; other firmware variants and devices may behave differently. The observed match between firmware components and the app is strong evidence, but it does not replace official NOAH register documentation.
+BLE register reads have been tested on four NOAH devices. WLAN discovery, pairing, selective deletion and meter readback were tested with firmware 19.20.14.4026 and two Shelly Pro 3EM emulators. Other firmware versions and accessory models remain unverified.
 
 The SOH value at I:102 should also be interpreted cautiously: for BMS version 14, the related NEXA documentation describes a constant value of 100. Whether and to what extent the NOAH behaves identically should be verified separately.
 
 ## 9. Attribution and Disclaimer
-
-The WLAN accessory command syntax and meter presets were informed by the Heliobridge project and related NEXA protocol documentation; BLE behavior was investigated separately on NOAH.
 
 The BLE protocol foundation (`protocol.py`, `growatt_ble.py`) builds on the community project **meiser79/growatt_noah_ble**. When publishing, respect its license and copyright notices.
 
