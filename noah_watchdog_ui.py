@@ -1,4 +1,4 @@
-"""NOAH Watchdog management v0.1.6 (Linux process control)."""
+"""NOAH Watchdog management v0.1.8 (Linux and Windows process control)."""
 import asyncio
 import json
 import math
@@ -27,7 +27,7 @@ CONSOLE = BASE / 'watchdog_console.log'
 DEFAULTS = dict(logging=True, wifi=False, mqtt=False, restart=False, cycles=3)
 
 
-def processes():
+def linux_processes():
     if not Path('/proc/uptime').exists():
         raise RuntimeError('Prozessverwaltung benötigt Linux /proc.')
     result = {}
@@ -52,8 +52,90 @@ def processes():
     return result
 
 
+# Windows process backend. Keep the existing Linux backend independent.
+def windows_psutil():
+    try:
+        import psutil
+    except ImportError as exc:
+        raise RuntimeError('Windows-Prozessverwaltung benötigt psutil (pip install psutil).') from exc
+    return psutil
+
+
+def windows_process_records():
+    psutil = windows_psutil()
+    result = {}
+    for proc in psutil.process_iter():
+        try:
+            args = proc.cmdline()
+            if not args or not re.fullmatch(r'python(?:w|[0-9.]+)?(?:\.exe)?', Path(args[0]).name, re.I):
+                continue
+            for i, arg in enumerate(args[1:-1], 1):
+                if Path(arg).name.casefold() != SCRIPT.name.casefold() or args[i+1] != 'run':
+                    continue
+                path = Path(arg)
+                if not path.is_absolute():
+                    path = Path(proc.cwd()) / path
+                if path.resolve() == SCRIPT.resolve():
+                    result[proc.pid] = (proc.create_time(), args[i+2:], proc.ppid(), args)
+                break
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError, ValueError):
+            continue
+    return result
+
+
+def windows_groups(records):
+    """Collapse matching launcher/worker chains, not independent instances."""
+    parents = {}
+    for pid, (started, args, ppid, command) in records.items():
+        parent = records.get(ppid)
+        if parent and ppid != pid and parent[0] <= started and parent[3] == command:
+            parents[pid] = ppid
+    # Only collapse unambiguous chains; branching remains a multiple-instance warning.
+    counts = Counter(parents.values())
+    parents = {pid: ppid for pid, ppid in parents.items() if counts[ppid] == 1}
+    groups = {}
+    for pid in records.keys() - parents.values():
+        chain = [pid]
+        while chain[-1] in parents and parents[chain[-1]] not in chain:
+            chain.append(parents[chain[-1]])
+        groups[pid] = chain
+    return groups
+
+
+def windows_processes():
+    records = windows_process_records()
+    return {pid: records[pid][:2] for pid in windows_groups(records)}
+
+
+def processes():
+    return windows_processes() if sys.platform == 'win32' else linux_processes()
+
+
+async def windows_stop(pid, identity):
+    psutil = windows_psutil()
+    records = windows_process_records()
+    groups = windows_groups(records)
+    if len(groups) != 1 or pid not in groups or records[pid][:2] != identity:
+        raise RuntimeError('Watchdog-Prozess hat sich geändert; bitte Status aktualisieren.')
+    # Stop worker first, then any surviving matching launcher(s).
+    for member in groups[pid]:
+        try:
+            proc = psutil.Process(member)
+            if proc.create_time() != records[member][0]:
+                continue
+            if windows_process_records().get(member) != records[member]:
+                continue
+            proc.terminate()
+            try:
+                await asyncio.to_thread(proc.wait, timeout=2)
+            except psutil.TimeoutExpired:
+                raise RuntimeError('Watchdog-Prozess läuft weiterhin.')
+        except psutil.NoSuchProcess:
+            pass
+
+
 def load_config():
-    data = json.loads(CONFIG.read_text()) if CONFIG.exists() else {}
+    data = json.loads(CONFIG.read_text(encoding='utf-8') if sys.platform == 'win32' else CONFIG.read_text()) if CONFIG.exists() else {}
     if isinstance(data, list):
         data = {'devices': data}
     if not isinstance(data, dict) or not isinstance(data.get('devices', []), list) or not isinstance(data.get('options', {}), dict):
@@ -267,9 +349,12 @@ class WatchdogScreen(ModalScreen):
             if self.child is not None and self.child.poll() is not None:
                 self.child = None
             found = processes()
-            uptime = float(Path('/proc/uptime').read_text().split()[0])
-            hz = os.sysconf('SC_CLK_TCK')
-            lines = [f'PID {pid} | Laufzeit {int(max(0,uptime-start/hz))//60} min | {" ".join(args)}' for pid,(start,args) in found.items()]
+            if sys.platform == 'win32':
+                lines = [f'PID {pid} | Laufzeit {int(max(0,time.time()-start))//60} min | {" ".join(args)}' for pid,(start,args) in found.items()]
+            else:
+                uptime = float(Path('/proc/uptime').read_text().split()[0])
+                hz = os.sysconf('SC_CLK_TCK')
+                lines = [f'PID {pid} | Laufzeit {int(max(0,uptime-start/hz))//60} min | {" ".join(args)}' for pid,(start,args) in found.items()]
             self.query_one('#wd_status',Static).update('\n'.join(lines) or 'Watchdog nicht aktiv')
             if initial and len(found)==1:
                 args = next(iter(found.values()))[1]
@@ -292,7 +377,10 @@ class WatchdogScreen(ModalScreen):
             raise ValueError('Mehrere Watchdogs aktiv; bitte manuell bereinigen.')
         for pid,identity in found.items():
             if processes().get(pid)==identity:
-                os.kill(pid,signal.SIGTERM)
+                if sys.platform == 'win32':
+                    await windows_stop(pid, identity)
+                else:
+                    os.kill(pid,signal.SIGTERM)
         for _ in range(50):
             if not processes():
                 return
@@ -311,7 +399,12 @@ class WatchdogScreen(ModalScreen):
         if processes():
             raise RuntimeError('Watchdog läuft bereits.')
         with CONSOLE.open('ab') as out:
-            self.child = subprocess.Popen(cmd,cwd=BASE,stdin=subprocess.DEVNULL,stdout=out,stderr=subprocess.STDOUT,start_new_session=True)
+            if sys.platform == 'win32':
+                self.child = subprocess.Popen(cmd,cwd=BASE,stdin=subprocess.DEVNULL,stdout=out,stderr=subprocess.STDOUT,
+                                              creationflags=subprocess.CREATE_NO_WINDOW,
+                                              env={**os.environ, 'PYTHONIOENCODING': 'utf-8'})
+            else:
+                self.child = subprocess.Popen(cmd,cwd=BASE,stdin=subprocess.DEVNULL,stdout=out,stderr=subprocess.STDOUT,start_new_session=True)
         await asyncio.sleep(1)
         if self.child.poll() is not None:
             raise RuntimeError(f'Start fehlgeschlagen (Exit {self.child.returncode}); Konsolenlog prüfen.')
