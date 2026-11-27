@@ -3,3 +3,4 @@ cryptography>=42
 windows-curses; sys_platform == "win32"
 textual
 rich
+psutil; sys_platform == "win32"
