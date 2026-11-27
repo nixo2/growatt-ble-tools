@@ -1,6 +1,6 @@
 # Growatt NOAH BLE Watchdog
 
-**Project release 1.0 · November 27, 2026 · Watchdog 0.4.2 · Watchdog UI 0.1.6 · Experimental / unofficial**
+**Project release 1.1 · November 27, 2026 · Watchdog 0.4.2 · Watchdog UI 0.1.8 · Experimental / unofficial**
 
 A Python watchdog for monitoring Growatt NOAH battery storage devices over Bluetooth Low Energy (BLE). It periodically reads connectivity status and can optionally restore Wi-Fi settings, check and repair MQTT broker configuration, and request a datalogger restart.
 
@@ -8,7 +8,7 @@ The watchdog communicates directly with the NOAH over BLE; it does not depend on
 
 > **Caution:** Automatic configuration changes and restarts are experimental. Test with one device first, keep a backup of your settings, and enable only the recovery actions you actually need. No recovery action is enabled by default.
 
-## Interactive watchdog management (recommended on Linux)
+## Interactive watchdog management (recommended on Linux and Windows)
 
 ```bash
 python noah_tui.py
@@ -16,7 +16,7 @@ python noah_tui.py
 
 Press **W** on the start screen or register overview. The integrated `noah_watchdog_ui.py` provides:
 
-- Start, stop, restart and status controls (PID and runtime); process management uses Linux `/proc`.
+- Start, stop, restart and status controls (PID and runtime); process management uses Linux `/proc` or Windows `psutil`.
 - Configurable monitoring interval and scan duration (defaults: five minutes and eight seconds).
 - **Geräte verwalten (BLE-Scan)** opens the existing interactive setup with its default scan duration. The running watchdog need not be stopped; the device list is reloaded when setup closes.
 - Explicit `[X]` / `[ ]` toggles for logging, Wi-Fi, MQTT and datalogger restart, plus the 1–3 cycle threshold and Save button.
@@ -24,7 +24,17 @@ Press **W** on the start screen or register overview. The integrated `noah_watch
 - Watchdog and console logs, today/all periods, manual text filtering, recovery shortcuts and jump to end. Normal display restores the previous manual filter after a recovery shortcut.
 - Per-device recovery statistics for today, seven days and all time, counting recovery starts rather than successes.
 
-A watchdog started from the interface runs independently of the TUI and writes console output to `watchdog_console.log`. Closing the interface does not stop monitoring. Set up `credentials.txt` as described below before enabling recovery.
+A watchdog started from the interface runs independently of the TUI and writes console output to `watchdog_console.log`. Closing the interface does not stop monitoring. Reopening the TUI detects the running watchdog again. On Windows, monitoring starts without an additional console window. Set up `credentials.txt` as described below before enabling recovery.
+
+### Platform-specific process management
+
+| | Linux | Windows |
+| --- | --- | --- |
+| Process discovery | `/proc` (unchanged) | `psutil` |
+| Background launch | `start_new_session=True` | `CREATE_NO_WINDOW` |
+| Stop | `SIGTERM` | Direct process termination |
+
+Windows groups matching parent/child Python launcher and interpreter processes into one watchdog instance and displays the executing interpreter PID. Independent instances are not merged; the Stop control refuses to terminate multiple independent watchdogs. Windows termination is not a graceful application shutdown. Avoid stopping during an active recovery operation, as configuration writes may be interrupted.
 
 ## Features
 
@@ -43,22 +53,33 @@ A watchdog started from the interface runs independently of the TUI and writes c
 - Python 3.11 or later (uses `asyncio.timeout`).
 - A supported BLE adapter and the necessary Bluetooth permissions.
 - `bleak` and the project's `protocol.py` and `growatt_ble.py` modules.
-- A terminal with `curses` support for interactive setup (Windows may require `windows-curses`).
+- A terminal with `curses` support for interactive setup (`windows-curses` on Windows).
+- `psutil` for integrated Windows process management only; no additional process-management dependency on Linux.
 
 Example installation on Debian / Linux:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install bleak textual rich
+python -m pip install -r requirements.txt
 ```
+
+On Windows (PowerShell), from the repository root:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+```
+
+The requirements file installs `windows-curses` and `psutil` only on Windows. Linux retains its existing `/proc`-based process management without `psutil`.
 
 Place the watchdog next to its shared BLE modules:
 
 ```text
 project/
-├── noah_tui.py                  # 1.0
-├── noah_watchdog_ui.py          # 0.1.6
+├── noah_tui.py                  # 1.1
+├── noah_watchdog_ui.py          # 0.1.8
 ├── noah_watchdog.py             # 0.4.2
 ├── protocol.py
 ├── growatt_ble.py
@@ -141,6 +162,8 @@ Follow the watchdog log:
 tail -f noah_watchdog.log
 ```
 
+On Windows (PowerShell), use `Get-Content .\noah_watchdog.log -Wait` to follow the log.
+
 ## 4. How MQTT checking and recovery work
 
 With the MQTT option enabled, each successful BLE poll queries the current MQTT host and port alongside the connection status. The watchdog compares them with `[MQTT] host` and `[MQTT] port` in `credentials.txt`.
@@ -187,7 +210,7 @@ The watchdog is intended for **automatic connectivity monitoring and recovery**,
 The TUI uses `noah_registers.py`, `protocol.py`, `growatt_ble.py`, and a register definition file such as `registers.txt`. It requires additional packages:
 
 ```bash
-python -m pip install textual rich
+python -m pip install -r requirements.txt
 python noah_tui.py
 ```
 
@@ -199,6 +222,8 @@ For register definitions, supported input/holding/configuration access, data con
 
 | Symptom | Check |
 | --- | --- |
+| Windows process management or setup dependency missing | Install the current `requirements.txt` in the active virtual environment. |
+| Multiple independent watchdogs detected | Inspect the running processes and resolve duplicate instances manually before using Stop or Restart. |
 | No devices appear during setup | BLE adapter, permissions, power, range; increase `--timeout`. |
 | Device is not monitored | It must be selected in setup and visible in the BLE scan. |
 | `credentials.txt` error | Confirm the file is beside the script, contains the enabled sections, and has mode `600` on Linux. |
@@ -218,9 +243,12 @@ For register definitions, supported input/holding/configuration access, data con
 
 ## 9. Version notes
 
-**Watchdog UI v0.1.6 (project release 1.0)**
+**Watchdog UI v0.1.8 (project release 1.1)**
 
-- Integrated process management, device setup, recovery configuration and log statistics as described above.
+- Added Windows process management using `psutil`, including virtual-environment launcher detection and windowless background startup.
+- Preserved the existing Linux `/proc` backend and interactive interface.
+- Windows start, stop and rediscovery after restarting the TUI were tested; Linux operation was regression-tested.
+- The standalone watchdog remains at v0.4.2.
 
 **Watchdog v0.4.2**
 

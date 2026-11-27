@@ -1,12 +1,12 @@
 # Growatt NOAH – BLE Register Diagnostics and Terminal Interface
 
 **Updated: November 27, 2026**  
-**Project release 1.0 · `noah_tui.py` v1.0 · `noah_watchdog_ui.py` v0.1.6 · `noah_watchdog.py` v0.4.2 · `noah_registers.py` v0.8.2**
+**Project release 1.1 · `noah_tui.py` v1.1 · `noah_watchdog_ui.py` v0.1.8 · `noah_watchdog.py` v0.4.2 · `noah_registers.py` v0.8.2**
 
 Tools for reading and diagnosing Growatt NOAH battery systems directly over Bluetooth Low Energy (BLE):
 
 - **`noah_tui.py`**: Recommended interactive Textual interface for register diagnostics, device management, configuration and timeslot editing.
-- **`noah_watchdog_ui.py`**: Integrated interactive watchdog management (Linux), accessible with `W`.
+- **`noah_watchdog_ui.py`**: Integrated interactive watchdog management (Linux and Windows), accessible with `W`.
 - **`noah_registers.py`**: CLI utility for discovery, reads, register lists and diagnostics.
 - **`noah_watchdog.py`**: Standalone monitoring and optional recovery process.
 
@@ -14,21 +14,31 @@ The BLE tools use the existing `protocol.py` and `growatt_ble.py` modules. BLE a
 
 ## 1. Requirements and Files
 
-You need a computer with a working BLE adapter, Python 3, and access to the Bluetooth interface. Both applications import `bleak`; the TUI also requires `textual` and `rich` (Rich is normally installed with Textual).
+You need a computer with a working BLE adapter, Python 3.11 or later, and access to the Bluetooth interface. Both applications import `bleak`; the TUI also requires `textual` and `rich` (Rich is normally installed with Textual).
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install bleak textual rich
+python -m pip install -r requirements.txt
 ```
+
+On Windows (PowerShell), from the repository root:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+```
+
+The requirements file installs `windows-curses` and `psutil` only on Windows. Linux retains its existing `/proc`-based process management without `psutil`.
 
 Place these files in the same project directory:
 
 ```text
 project/
 ├── noah_registers.py       # v0.8.2
-├── noah_tui.py             # v1.0
-├── noah_watchdog_ui.py     # v0.1.6
+├── noah_tui.py             # v1.1
+├── noah_watchdog_ui.py     # v0.1.8
 ├── noah_watchdog.py        # v0.4.2
 ├── protocol.py             # BLE protocol module
 ├── growatt_ble.py          # BLE device communication
@@ -58,9 +68,9 @@ python noah_tui.py --address 'AA:BB:CC:DD:EE:FF'
 python noah_tui.py --file registers.txt
 ```
 
-### Integrated watchdog interface (Linux)
+### Integrated watchdog interface (Linux and Windows)
 
-Press `W` on the start screen or register overview. Manage devices via the existing BLE setup (default eight-second scan), configure logging and recovery, start/stop/restart the process, inspect PID and runtime, and view watchdog/console logs with filters and recovery statistics. Saving settings or returning from setup while monitoring is active opens a restart notice, confirmed with Enter. The process is not restarted automatically. Recovery statistics count starts, not successful repairs. See the [watchdog guide](README_watchdog.md).
+Press `W` on the start screen or register overview. Manage devices via the existing BLE setup (default eight-second scan), configure logging and recovery, start/stop/restart the process, inspect PID and runtime, and view watchdog/console logs with filters and recovery statistics. Saving settings or returning from setup while monitoring is active opens a restart notice, confirmed with Enter. The process is not restarted automatically. Recovery statistics count starts, not successful repairs. On Windows, process management uses `psutil`, groups matching Python virtual-environment launcher and interpreter processes, and starts monitoring without an additional console window. Linux continues to use `/proc`. Closing and reopening the TUI does not stop monitoring. Windows Stop terminates the process directly; avoid stopping during recovery writes. See the [watchdog guide](README_watchdog.md).
 
 ### Command-line interface (CLI)
 
@@ -205,7 +215,7 @@ Standalone lines enclosed in double asterisks control the display:
 | `G` | Switch device |
 | `K` | Open device management |
 | `N` | Trigger datalogger restart (**active operation**) |
-| `W` | Open watchdog management (Linux) |
+| `W` | Open watchdog management (Linux and Windows) |
 | `Q` | Quit or close the current dialog |
 
 The TUI reads registers through `noah_registers.py`, displays the results in two columns, and opens a detail view with Enter. The optional `register_info.txt` adds explanatory notes under section headings such as `[I:120]`, `[H:254]`, or `[C:21]`.
@@ -258,6 +268,8 @@ The `list` command supports options including `--timeout`, `--block-size` (defau
 **`ModuleNotFoundError: noah_registers`** – The versioned file must be named `noah_registers.py` and placed next to `noah_tui.py`.
 
 **`ModuleNotFoundError: textual` / `bleak`** – Activate the virtual environment and install the dependencies.
+
+**`ModuleNotFoundError: psutil` / `curses` on Windows** – Install the current `requirements.txt` in the active virtual environment.
 
 **No BLE devices found** – Check the Bluetooth adapter, permissions, signal range, and possible simultaneous connections. A device not found by scanning is not necessarily defective.
 
