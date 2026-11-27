@@ -4,7 +4,9 @@
 
 This independent, community-developed project provides Python tools for working directly with **Growatt NOAH** devices over Bluetooth Low Energy (BLE), without requiring the Growatt cloud for BLE operations.
 
-The **Register Reader and interactive TUI** are the main tools. A separate **Watchdog** monitors connectivity and can restore selected settings automatically.
+**Release 1.0 · November 27, 2026**
+
+The interactive **terminal user interfaces (TUI)** are the recommended entry point: register diagnostics and configuration, plus integrated watchdog management. Command-line tools remain available for scripting and unattended monitoring.
 
 > **Device support:** The tools described below currently target **NOAH**. Support for **NEXA** is a future goal; do not assume the existing commands, register maps, or write operations are compatible with NEXA.
 >
@@ -14,9 +16,10 @@ The **Register Reader and interactive TUI** are the main tools. A separate **Wat
 
 | Tool | Purpose | Documentation |
 | --- | --- | --- |
-| **Register Reader** (`noah_registers.py`) | BLE device discovery, command-line register reads, register lists, and diagnostics. | [Register Reader & TUI guide](docs/README_noah_ble_tools.md) |
-| **Register TUI** (`noah_tui.py`) | Interactive terminal interface to inspect registers, view details, and perform supported configuration changes. | [Register Reader & TUI guide](docs/README_noah_ble_tools.md) |
-| **BLE Watchdog** (`noah_watchdog.py`) | Periodically check connectivity, compare MQTT host/port with local credentials, and optionally recover settings or restart the datalogger. | [Watchdog guide](docs/README_watchdog.md) |
+| **Register TUI 1.0** (`noah_tui.py`) | Interactive register diagnostics, device management, timeslots and supported configuration changes. | [BLE tools guide](docs/README_noah_ble_tools.md) |
+| **Watchdog UI 0.1.6** (`noah_watchdog_ui.py`) | Integrated Linux process management, device setup, recovery options, logs and statistics. | [Watchdog guide](docs/README_watchdog.md) |
+| Register Reader 0.8.2 (`noah_registers.py`) | CLI discovery, register reads and diagnostics. | [BLE tools guide](docs/README_noah_ble_tools.md) |
+| BLE Watchdog 0.4.2 (`noah_watchdog.py`) | Standalone connectivity monitoring and optional recovery. | [Watchdog guide](docs/README_watchdog.md) |
 
 A [German guide for the Register Reader and TUI](docs/README_noah_ble_tools_DE.md) is also available.
 
@@ -38,35 +41,23 @@ python -m pip install -r requirements.txt
 
 On Windows, activate the virtual environment with `.venv\Scripts\activate` instead. The watchdog's curses-based setup may need additional Windows support; see its guide.
 
-### Register Reader / TUI
-
-Launch the interactive terminal interface:
+### Interactive interfaces (recommended)
 
 ```bash
 python noah_tui.py
 ```
 
-Scan for nearby supported devices using the command-line reader:
+Select a NOAH for register diagnostics, or open **Watchdog (W)** from the start screen or register overview. On Linux, the integrated watchdog interface supports starting, stopping and restarting the monitoring process, configuring devices and recovery options, and viewing filtered logs and recovery statistics. Configuration changes require a manual watchdog restart to take effect; a confirmation dialog explains this without stopping the process automatically.
+
+### Command-line tools (CLI)
 
 ```bash
 python noah_registers.py scan --seconds 8
-```
-
-The register tools use `registers.txt` for register definitions and display configuration. See the [detailed reader documentation](docs/README_noah_ble_tools.md) before attempting write operations.
-
-### Watchdog
-
-Select devices and recovery options:
-
-```bash
 python noah_watchdog.py setup
-```
-
-Start monitoring (default: five-minute cycles):
-
-```bash
 python noah_watchdog.py run
 ```
+
+The default watchdog interval is five minutes and the default BLE scan duration is eight seconds. The register tools use `registers.txt`; consult the [BLE tools guide](docs/README_noah_ble_tools.md) before writing registers.
 
 The watchdog's optional Wi-Fi/MQTT recovery uses a local `credentials.txt` file. Consult the [watchdog documentation](docs/README_watchdog.md) and `credentials.example.txt` before enabling recovery. **Never commit real credentials, device secrets, or private logs.**
 
@@ -77,6 +68,7 @@ growatt-noah-ble-watchdog/    # Current repository name; rename is optional
 ├── README.md                # This project overview
 ├── noah_registers.py        # CLI register reader
 ├── noah_tui.py              # Interactive register interface
+├── noah_watchdog_ui.py      # Integrated watchdog management
 ├── noah_watchdog.py         # Connectivity watchdog
 ├── protocol.py             # Shared protocol implementation
 ├── growatt_ble.py          # Shared BLE transport
@@ -87,16 +79,16 @@ growatt-noah-ble-watchdog/    # Current repository name; rename is optional
 ├── LICENSE
 ├── NOTICE
 └── docs/
-    ├── README_noah_registers.md
-    ├── README_noah_registers_DE.md
+    ├── README_noah_ble_tools.md
+    ├── README_noah_ble_tools_DE.md
     └── README_watchdog.md
 ```
 
-All paths in this README are relative to the repository root. The documentation links match the filenames currently shown in the `develop` branch.
+All paths in this README are relative to the repository root.
 
 ## Development and releases
 
-The Register Reader, TUI, and Watchdog have **separate internal version numbers** and may evolve at different rates. Check the respective guides and release notes for component-specific changes. Existing Watchdog releases remain part of the project's history even as the repository expands beyond monitoring.
+Starting with release 1.0, the project release version and TUI version are aligned. The Register Reader, Watchdog and Watchdog UI retain independent internal versions. Check the respective guides and release notes for component-specific changes. Existing Watchdog releases remain part of the project's history even as the repository expands beyond monitoring.
 
 NEXA support is **planned, not implemented or verified** in the current NOAH tools. Contributions, reproducible diagnostic results, and careful protocol research are welcome; please avoid publishing credentials or personally identifying device data in issues.
 

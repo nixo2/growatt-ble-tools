@@ -1,182 +1,149 @@
-# Growatt NOAH – BLE-Registerdiagnose und Terminal-Oberfläche
+# Growatt NOAH – BLE-Registerdiagnose und Terminaloberflächen
 
-**Stand: 26. November 2026**  
-**`noah_registers.py` v0.8.2 · `noah_tui.py` v0.9.7**
+**Stand: 27. November 2026 · Projekt-Release 1.0**
 
-Zwei Python-Programme zum direkten Auslesen und zur Diagnose von Growatt-NOAH-Speichern über Bluetooth Low Energy (BLE):
+| Komponente | Version |
+|---|---|
+| `noah_tui.py` | 1.0 |
+| `noah_watchdog_ui.py` | 0.1.6 |
+| `noah_watchdog.py` | 0.4.2 |
+| `noah_registers.py` | 0.8.2 |
 
-- **`noah_registers.py`**: Kommandozeilenwerkzeug für Gerätesuche, Einzelabfragen, Registerlisten und Diagnose.
-- **`noah_tui.py`**: interaktive Terminaloberfläche auf Basis von Textual mit Geräteverwaltung, zweispaltiger Registeranzeige, Detailansichten und ausgewählten Schreibfunktionen.
+Die interaktiven Terminaloberflächen (TUI) sind der empfohlene Einstieg für Diagnose, Konfiguration und Überwachung des Growatt NOAH über Bluetooth Low Energy (BLE). Die BLE-Kommunikation benötigt weder die Growatt-Cloud noch eine funktionierende MQTT-Verbindung. Die Kommandozeilenwerkzeuge stehen weiterhin für Skripte und automatisierte Abläufe zur Verfügung.
 
-Die Programme nutzen die vorhandenen Module `protocol.py` und `growatt_ble.py`. Für BLE-Abfragen ist keine Growatt-Cloud und kein MQTT erforderlich. Das Projekt ist **inoffiziell und experimentell**; insbesondere Registerbedeutungen und Schreibzugriffe sind nicht durch Growatt für diese Anwendung freigegeben.
+## 1. Installation
 
-## 1. Voraussetzungen und Dateien
-
-Ein Computer mit funktionierendem BLE-Adapter, Python 3 und Zugriff auf die Bluetooth-Schnittstelle. Die Programme importieren `bleak`; die TUI benötigt zusätzlich `textual` und `rich` (Rich wird üblicherweise mit Textual installiert).
+Benötigt werden Python 3.11 oder neuer für den vollständigen Funktionsumfang, ein BLE-Adapter und entsprechende Bluetooth-Berechtigungen.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install bleak textual rich
+python -m pip install -r requirements.txt
 ```
 
-Die Dateien müssen im selben Projektverzeichnis liegen:
+Im Projektverzeichnis befinden sich die vier oben genannten Python-Dateien sowie `protocol.py`, `growatt_ble.py`, `registers.txt` und optional `register_info.txt`. Die TUI benötigt Textual und Rich, die BLE-Kommunikation Bleak. Die integrierte Watchdog-Prozessverwaltung setzt Linux voraus.
 
-```text
-projekt/
-├── noah_registers.py       # v0.8.2
-├── noah_tui.py             # v0.9.7
-├── protocol.py             # BLE-Protokollmodul
-├── growatt_ble.py          # BLE-Gerätekommunikation
-├── registers.txt           # Registerauswahl, Umrechnung, Layout
-├── register_info.txt       # optional: Erläuterungen im Detailfenster
-└── noah_devices.txt        # von der TUI verwaltete Geräteliste
-```
-
-
-## 2. Schnellstart
-
-**TUI mit Geräteauswahl:**
+## 2. Interaktive Oberflächen
 
 ```bash
 python noah_tui.py
 ```
 
-**TUI mit direkter BLE-Adresse:**
+Die Startoberfläche ermöglicht die Geräteauswahl und den direkten Zugang zur Watchdog-Verwaltung. Die Registeransicht zeigt die ausgelesenen Werte in zwei Spalten. Mit Enter werden Details zum ausgewählten Register angezeigt. `register_info.txt` ergänzt Erläuterungen, beispielsweise unter `[I:120]`, `[H:254]` oder `[C:21]`.
+
+| Taste | Funktion |
+|---|---|
+| ↑ / ↓ | Register auswählen |
+| ← / → | Spalte wechseln |
+| Enter | Details öffnen |
+| R | Register neu lesen |
+| G | Gerät wechseln |
+| K | Geräte verwalten |
+| N | Datenlogger neu starten (aktiver Eingriff) |
+| W | Watchdog-Verwaltung öffnen |
+| Q | Beenden bzw. Dialog schließen |
+
+Optional kann ein Gerät oder eine Registerdatei direkt angegeben werden:
 
 ```bash
 python noah_tui.py --address 'AA:BB:CC:DD:EE:FF'
-```
-
-**Andere Registerdatei verwenden:**
-
-```bash
 python noah_tui.py --file registers.txt
 ```
 
-**Kommandozeile – Geräte suchen:**
+### Watchdog-Verwaltung (Linux)
+
+Mit W gelangt man aus der Start- oder Registeransicht zur Watchdog-Verwaltung. Dort lassen sich der Prozess starten, stoppen und neu starten, PID und Laufzeit anzeigen sowie Intervall und Scandauer einstellen. Standardwerte sind fünf Minuten und acht Sekunden.
+
+Über **Geräte verwalten (BLE-Scan)** wird das vorhandene Setup mit seiner Standard-Scandauer aufgerufen. Der Watchdog kann dabei weiterlaufen. Die Geräteliste wird anschließend neu geladen. Logging, WLAN-Recovery, MQTT-Prüfung/-Recovery und Logger-Neustart werden über eindeutige `[X]`- bzw. `[ ]`-Schaltflächen eingestellt; der Schwellenwert beträgt 1–3 Zyklen.
+
+Beim Speichern oder nach Rückkehr aus dem Setup erscheint bei laufendem Watchdog ein modaler Neustarthinweis, der mit Enter bestätigt wird. Ein Neustart erfolgt ausschließlich auf Entscheidung des Benutzers, da der Prozess seine Konfiguration beim Start lädt.
+
+Die Protokollansicht bietet Watchdog- und Konsolenlog, Zeiträume Heute/Gesamt, Textfilter, Recovery-Schnellfilter und Sprung ans Ende. Anzeigen stellt nach einem Recovery-Schnellfilter den vorherigen manuellen Filter wieder her. Die Statistik zählt Recovery-Starts je Gerät für heute, sieben Tage und insgesamt, nicht erfolgreiche Reparaturen. Weitere Informationen: [Watchdog-Dokumentation](README_watchdog.md).
+
+### Schreibzugriffe und Timeslots
+
+Die TUI unterstützt experimentelle Schreibzugriffe auf einzelne Holding-Register, ausgewählte ASCII-Konfigurationsparameter und neun Timeslots mit jeweils fünf Holding-Registern. Nach Schreibzugriffen wird versucht, die tatsächlichen Werte zurückzulesen. Ein Timeout beweist nicht, dass der Schreibzugriff wirkungslos war. Kombinierte I,C-Firmwarewerte sind nur lesbar.
+
+### WLAN-Zubehör (experimentell)
+
+Über **Gekoppelte Geräte** und Enter kann die WLAN-Zubehörsuche geöffnet werden. Der NOAH sucht selbst per mDNS; die Steuerung erfolgt über BLE. Standardmodell ist Shelly Pro 3EM. Weitere Voreinstellungen sind Shelly 3EM, Pro 3EM-3CT63, Pro EM-50, Pro 1PM, everHome EcoTracker und Sparky P1; diese Alternativen wurden im beschriebenen Test nicht validiert. Benutzerdefinierte mDNS-Dienste und Typ-IDs sind möglich.
+
+Die Suche umfasst 2–12 Mindestzyklen zu je fünf Sekunden. Änderungen der abschließenden MAC-Liste oder Lesefehler verlängern die Abfrage bis maximal zwölf Zyklen. Die interne Suche des NOAH kann darüber hinaus weiterlaufen. C123 wird vor der Suche experimentell auf ASCII `0` gesetzt und rückgelesen; bei fehlgeschlagenem Reset gelten vorhandene Adressen nicht als bestätigte Neufunde.
+
+Kopplungsarten: `access,0` (messen und regeln), `access,1` (nur messen). C122-Zustand 3 bestätigt die Kopplung, nicht unabhängig die gewählte Zugriffsart. Einzelne oder alle WLAN-Einträge können gelöscht werden; die Löschung wird über C122 geprüft. Relevante Rücklesewerte aktualisieren die Hauptansicht.
+
+| Register | Bedeutung |
+|---|---|
+| C102 | RF-Zubehörliste |
+| C122 | WLAN-Zubehöreinträge und Befehle |
+| C123 | MAC-Liste der Suche |
+| C143 | Weitergeleitetes Modbus; für getestete WLAN-Kopplung nicht erforderlich |
+| H310 | Einspeiseleistungsbetrag (W; Richtung bei negativer Leistung noch nicht getestet) |
+| H311 | Bezugsleistung (W; verifiziert) |
+| H313 | Zubehöranzahl; blieb im WLAN-Test null |
+
+C122 verwendet `DEV:<entry>-<mode>-<state>,<name>,<address>` mit `&` als Trenner. Modus 7 steht für WLAN-Suche; Zustände 0, 3 und 5 für ungekoppelt, gekoppelt und gelöscht. Gelöschte Einträge können MAC/IP-Daten behalten. Beispiele: `ADD:111-7-_http._tcp.,2`, `CRL:112-7-add:sn,80225394980980|access,1`, `DEL:112-7-_http._tcp.,2`. Die tatsächliche Eintragsnummer ist zu verwenden.
+
+**Firmwarebeobachtung:** Bei zwei getesteten NOAHs unterbrach eine erneute Suche mit bereits gekoppeltem Zähler die Messwertübertragung, nachdem ein ungekoppelter Eintrag angelegt worden war. Gezieltes Löschen oder Koppeln dieses Eintrags stellte die Messwerte wieder her. Bei zwei gekoppelten Zählern zeigte H311 im Test den Wert von Eintrag 112, nicht die Summe. Welcher Zähler die Regelung bestimmt und ob `access,1` zuverlässig von der Regelung ausschließt, ist offen. Ein Nullwert allein beweist keinen Fehler. Ein Zusammenhang mit fehlgeschlagenen App-Kopplungen ist nicht nachgewiesen.
+
+## 3. Kommandozeile (CLI)
 
 ```bash
 python noah_registers.py scan --seconds 8
-```
-
-**Kommandozeile – Registerliste ausgeben:**
-
-```bash
 python noah_registers.py list --address 'AA:BB:CC:DD:EE:FF' --file registers.txt
-```
-
-**Einzelnes Input-Register auslesen:**
-
-```bash
 python noah_registers.py read --address 'AA:BB:CC:DD:EE:FF' --type input --register 120
-```
-
-**Holding-Register auslesen:**
-
-```bash
 python noah_registers.py read --address 'AA:BB:CC:DD:EE:FF' --type holding --register 254 --count 5
+python noah_watchdog.py setup
+python noah_watchdog.py run
 ```
 
-Ohne Unterbefehl startet `noah_registers.py` sein interaktives Diagnosemenü.
+Ohne Unterbefehl öffnet `noah_registers.py` sein interaktives Diagnosemenü. Hilfe erhält man über `--help`, auch für die Unterbefehle `scan`, `read` und `list`. `list` unterstützt unter anderem `--timeout`, `--block-size` (16), `--max-gap` (2) und `--verbose`. Der ältere Schalter `list --type` bleibt kompatibel; Registertypen aus der Datei haben Vorrang.
 
-## 3. Registertypen und Transport
+## 4. Registertypen und Transport
 
-| Kürzel | Datenquelle | Leseweg | Datentyp |
+| Typ | Quelle | Leseverfahren | Datentyp |
 |---|---|---|---|
-| `I` | Input-Register | Growatt BLE `0x17`, darin Modbus FC04 | 16-Bit-Wörter |
-| `H` | Holding-Register | Growatt BLE `0x17`, darin Modbus FC03 | 16-Bit-Wörter |
-| `C` | Growatt-Konfigurationsparameter | Growatt BLE `0x19` (QUERY) | Bytefolgen variabler Länge, oft ASCII |
-| `I,C` / `H,C` | Gemischte Quellen | beide passenden Lesewege | kombinierte **Anzeige**, kein gemeinsames physisches Register |
+| I | Input-Register | BLE 0x17, Modbus FC04 | 16 Bit |
+| H | Holding-Register | BLE 0x17, Modbus FC03 | 16 Bit |
+| C | Growatt-Konfiguration | BLE 0x19 (QUERY) | Variable Bytefolge, häufig ASCII |
+| I,C / H,C | Gemischte Quellen | Beide Verfahren | Kombinierter Anzeigewert |
 
-Ein Holding-Register ist nicht automatisch ein Datalogger-Parameter. Der `C`-Bereich ist ein separater Growatt-Konfigurationszugriff.
+Holding-Register sind nicht automatisch Datenloggerparameter. C besitzt einen eigenen Adressraum. Für I:0–123 werden experimentell bestätigte 16-Wort-Fenster genutzt: `0–15, 16–31, 32–47, 48–63, 64–79, 80–95, 96–111, 108–123`. Das letzte Fenster überlappt absichtlich; Einzelabfragen von I:119/I:120 waren unzuverlässig.
 
-### Optimierte Input-Abfragen
-
-Für die Input-Register im Bereich **I:0–123** verwendet die aktuelle Implementierung experimentell bestätigte 16-Wort-Lesefenster:
+## 5. Format von registers.txt
 
 ```text
-0–15, 16–31, 32–47, 48–63,
-64–79, 80–95, 96–111, 108–123
-```
-
-Das letzte Fenster überlappt absichtlich. Diese Optimierung ist wichtig: Einzelabfragen von I:119/I:120 waren bei Tests nicht zuverlässig, während der 16er-Block erfolgreich war. Holding- und Config-Abfragen verwenden weiterhin ihre eigenen Verfahren. Register außerhalb der bestätigten Fenster werden mit der bisherigen Abfragelogik behandelt.
-
-## 4. Aufbau der `registers.txt`
-
-Grundformat (UTF-8), ein Eintrag pro Zeile:
-
-```text
-Register|Bezeichnung|Faktor|Einheit|Registertyp
-```
-
-Beispiele:
-
-```text
-101|Ladezyklen|1|Zyklen|I
+Register|Label|Factor|Unit|RegisterType
+101|Charge cycles|1|cycles|I
 102|SOH|1|%|I
-119-120|Firmware-Teile|CombLBHBLB|.|I
-21|Firmware-Zusatz|ASCII||C
+119-120|Firmware components|CombLBHBLB|.|I
+21|Firmware suffix|ASCII||C
 119-120,21|Firmware|CombLBHBLB+ASCIIstrip(.)|.|I,C
 ```
 
-Die fünfte Spalte ist optional; ohne Angabe wird `I` angenommen. Kommentarzeilen beginnen mit `#`, Leerzeilen werden ignoriert.
-
-### Registerangaben
-
-- `119`: einzelnes Register.
-- `119-120`: zusammenhängender Bereich einschließlich beider Grenzen.
-- `100->16`: 16 Register ab Adresse 100 (100 bis 115).
-- `30,42`: explizite Liste einzelner Register.
-- `119-120,21` mit Typ `I,C`: **erste Gruppe** Input-Register 119–120, **zweite Gruppe** Config-Parameter 21.
-
-Die derzeitige gemischte Syntax unterstützt konkret `I,C` und `H,C` mit einem Modbus-Bereich und **einer** C-Parameter-ID. Sie ist kein beliebig erweiterbarer Ausdrucksparser.
-
-### Faktoren und Darstellungsformen
+UTF-8, eine Definition pro Zeile. Die fünfte Spalte ist optional (Standard I); `#` leitet Kommentare ein. Leere Zeilen werden ignoriert. `119` bezeichnet ein Register, `119-120` einen Bereich, `100->16` 16 Register ab 100, `30,42` eine explizite Liste. Gemischte Typen I,C und H,C unterstützen einen Modbus-Bereich und genau einen C-Parameter.
 
 | Faktor | Bedeutung |
 |---|---|
-| `1`, `0.1`, `0.01` | Multiplikation des Rohwerts |
-| `*0.1 -273.1` | arithmetische Umrechnung |
-| `ASCII` | 16-Bit-Wörter als ASCII bzw. C-Parameter als Zeichenfolge |
-| `HEX` | Hexadezimalanzeige; bei C dezimalen ASCII-Zahlenwert umrechnen |
-| `RAWHEX` | unveränderte Bytes hexadezimal |
-| `MAC` | dezimale MAC-Adressen aus C-Parametern als Hex-MAC, auch mehrere mit `&` getrennte Werte |
-| `TIME` | Uhrzeit aus High-Byte (Stunden) und Low-Byte (Minuten) |
-| `bit3-0` | ausgewählte Bits als Bitfolge |
-| `CombLBHBLB` | ausgewählte Bytes mehrerer 16-Bit-Wörter kombinieren |
-| `CombLBHBLB+ASCIIstrip(.)` | ausgewählte Bytes plus bereinigte C-ASCII-Zeichenfolge |
+| `1`, `0.1`, `0.01` | Multiplikation |
+| `*0.1 -273.1` | Arithmetische Umrechnung |
+| `ASCII` | ASCII-Interpretation |
+| `HEX` | Hexadezimale Darstellung |
+| `TIME` | High Byte Stunden, Low Byte Minuten |
+| `bit3-0` | Bitfolge |
+| `CombLBHBLB` | Kombination ausgewählter Bytes |
+| `CombLBHBLB+ASCIIstrip(.)` | Bytekombination plus bereinigter ASCII-Parameter |
 
-Weitere unterstützte Optionen bei numerischen Formeln sind `NULL0`, `NULL65535` und `NOHEX`. Bei numerischen Statuswerten kann die Einheitsspalte auch eine Legende enthalten, beispielsweise `0 Aus, 1 Ein`.
+Weitere numerische Optionen: `NULL0`, `NULL65535`, `NOHEX`. Die Einheitenspalte kann eine Statuslegende enthalten, z. B. `0 Off, 1 On`.
 
-### Firmwareversion vollständig zusammensetzen
+### Firmwareversion zusammensetzen
 
-**Empfohlene Zeile:**
+I:119 = `0x0013` (LB=19), I:120 = `0x140E` (HB=20, LB=14), C:21 = `4.0.2.6`. Die Einheit `.` wird an jede numerische Komponente angehängt; `ASCIIstrip(.)` entfernt sämtliche Punkte aus C:21. Ergebnis: **19.20.14.4026**. Dies ist eine reine Anzeigeformatierung, kein neuer BLE-Befehl. HB bezeichnet Bits 15–8, LB Bits 7–0.
 
-```text
-119-120,21|Firmware|CombLBHBLB+ASCIIstrip(.)|.|I,C
-```
-
-Die bekannten Rohwerte sind:
+### Layoutanweisungen
 
 ```text
-I:119 = 0x0013  → Low-Byte  = 19
-I:120 = 0x140E  → High-Byte = 20; Low-Byte = 14
-C:21  = "4.0.2.6" (ASCII)
-```
-
-Die numerischen Teilwerte bekommen **jeweils auch nach dem letzten Wert** das Suffix aus der Einheitsspalte (`.`): `19.20.14.`. `ASCIIstrip(.)` entfernt anschließend **alle** Punkte aus der C-Zeichenfolge (`4026`), bevor sie angehängt wird.
-
-**Ergebnis: `19.20.14.4026`**, entsprechend der beobachteten Anzeige in der Growatt-App.
-
-`HB` bedeutet High-Byte (Bits 15–8), `LB` Low-Byte (Bits 7–0). Die Kombination ist eine **Formatierung bereits gelesener Werte**, kein neuer BLE-Befehl. `ASCIIstrip(.)` bezeichnet hier trotz des Namens ein Entfernen sämtlicher Punkte (`replace`), nicht nur ein Entfernen am Anfang und Ende.
-
-### Layoutbefehle
-
-Standalone-Zeilen mit doppelten Sternchen steuern die Ausgabe:
-
-```text
-**[Batterie]**
+**[Battery]**
 **LEER**
 **---**
 **===40===**
@@ -184,88 +151,21 @@ Standalone-Zeilen mit doppelten Sternchen steuern die Ausgabe:
 **[Datalogger]**
 ```
 
-`**SPALTE**` bzw. `**SEITENUMBRUCH**` beginnt eine neue Anzeigespalte. Überschriften und Trennlinien benötigen keinen Registerzugriff.
+`**SPALTE**` oder `**SEITENUMBRUCH**` beginnt eine neue Spalte. Überschriften und Trenner lösen keine Registerabfragen aus.
 
-## 5. TUI: Bedienung
+## 6. Fehlerbehebung
 
-| Taste | Funktion |
-|---|---|
-| `↑` / `↓` | vorherigen / nächsten Eintrag auswählen |
-| `←` / `→` | linke / rechte Spalte auswählen |
-| `Enter` | Details zum markierten Eintrag |
-| `R` | alle Register neu lesen |
-| `G` | Gerät wechseln |
-| `K` | Geräteverwaltung öffnen |
-| `N` | Datalogger-Neustart anstoßen (**aktiver Eingriff**) |
-| `Q` | beenden bzw. Dialog verlassen |
+- Fehlende Module: Dateinamen prüfen, virtuelle Umgebung aktivieren und Abhängigkeiten installieren.
+- Keine BLE-Geräte: Adapter, Berechtigungen, Reichweite und parallele Verbindungen prüfen.
+- Einzelregister antwortet nicht: geeignete Blockabfrage versuchen; fehlende Antwort beweist nicht, dass ein Register nicht existiert.
+- Firmwarekombination fehlerhaft: Definition und Versionen prüfen. Fehlende Teilwerte dürfen nicht als gültige Firmwareversion interpretiert werden.
 
-Die TUI liest die Register über `noah_registers.py`, zeigt die Daten zweispaltig an und öffnet per Enter eine Detailansicht. Die optionale Datei `register_info.txt` ergänzt dort erläuternde Texte unter Abschnittsüberschriften wie `[I:120]`, `[H:254]` oder `[C:21]`.
+## 7. Projektstatus, Grenzen und Lizenz
 
-### Schreibfunktionen – Vorsicht
+Registerlesezugriffe wurden an vier NOAHs getestet. WLAN-Suche, Kopplung, gezieltes Löschen und Rücklesen wurden mit Firmware 19.20.14.4026 und zwei Shelly-Pro-3EM-Emulatoren getestet. Andere Firmwarestände und Zubehörmodelle sind nicht verifiziert. Der SOH-Wert I:102 ist vorsichtig zu interpretieren: Für BMS-Version 14 beschreibt die verwandte NEXA-Dokumentation einen konstanten Wert von 100; die Übertragbarkeit auf NOAH ist offen. NEXA-Unterstützung ist geplant, nicht implementiert oder verifiziert.
 
-Die TUI enthält experimentelle Funktionen zum Ändern einzelner Holding-Register, bestimmter ASCII-Config-Parameter sowie zum Bearbeiten der neun Timeslots (je fünf Holding-Register). Schreibvorgänge erfolgen über separate Growatt-/Modbus-Befehle; die Implementierung versucht anschließend, die tatsächlichen Werte zurückzulesen. Ein Timeout beweist **nicht**, dass ein Schreibvorgang wirkungslos geblieben ist.
+Die BLE-Grundlage (`protocol.py`, `growatt_ble.py`) basiert auf **meiser79/growatt_noah_ble**. Lizenz und Urheberrechtshinweise beachten; siehe [LICENSE](../LICENSE) und [NOTICE](../NOTICE).
 
-Die kombinierte Firmwarezeile `I,C` ist **nur lesbar**. Niemals ungetestete Schreibwerte an Geräte senden; Änderungen an Betriebsart, Leistung, Zeitplänen oder Kommunikation können den Betrieb unmittelbar beeinflussen.
+**Inoffizielles, experimentelles Projekt ohne Verbindung zu Growatt. Keine Gewähr für Korrektheit oder Betriebssicherheit.** Schreib- und Neustartfunktionen bewusst und auf eigenes Risiko verwenden. Keine Zugangsdaten oder privaten Protokolle veröffentlichen.
 
-### WLAN-Zubehörverwaltung (experimentell)
-
-Über **Gekoppelte Geräte** und Enter öffnet sich die Zubehörverwaltung. Der NOAH selbst sucht WLAN-Geräte per mDNS; der Computer steuert Suche und Kopplung über BLE. ShinePhone und Cloud sind dafür nicht erforderlich.
-
-- Gerätetyp auswählen (Standard Shelly Pro 3EM) oder mDNS-Dienst und Typ-ID benutzerdefiniert eingeben. Weitere Vorlagen: Shelly 3EM, Pro 3EM-3CT63, Pro EM-50, Pro 1PM, everHome EcoTracker und Sparky P1. Diese Alternativen wurden hier nicht praktisch verifiziert.
-- 2–12 Mindestzyklen über Eingabefeld oder −/+ einstellen. Ein Zyklus dauert fünf Sekunden. Ändert sich die MAC-Menge bei der letzten Abfrage oder schlägt diese fehl, verlängert sich das Polling um einen Zyklus, maximal auf insgesamt zwölf. Die interne mDNS-Suche kann danach weiterlaufen.
-- C123 wird vor der Suche experimentell auf ASCII `0` gesetzt und rückgelesen. Ein separater Button zum Leeren ist vorhanden. Bei fehlgeschlagenem Reset gelten vorhandene Adressen nicht als bestätigte neue Treffer.
-- Gefundene MAC und Kopplungsart auswählen: `access,0` (Messen und regeln) oder `access,1` (Nur messen). Die Kopplung wird über C122, Status 3, bestätigt; die Kopplungsart selbst wird nicht unabhängig rückbestätigt.
-- Einzelne WLAN-Einträge einschließlich ungekoppelter Einträge gezielt löschen oder ausdrücklich alle löschen. Der Löschstatus wird über C122 kontrolliert. Relevante Rücklesewerte aktualisieren die Haupttabelle ohne vollständigen Reload.
-- C122 wird nach Eintragsnummer sortiert und in getrennten Blöcken mit Hex-MAC, IP und Status angezeigt. Die Rohdaten bleiben zur Diagnose erhalten.
-
-| Register | Bedeutung |
-|---|---|
-| C102 | RF-Geräteliste |
-| C122 | WLAN-Geräteeinträge und Befehle |
-| C123 | MAC-Suchliste |
-| C143 | Routed Modbus; für die getestete WLAN-Kopplung nicht erforderlich |
-| H310 | Einspeiseleistung als Betrag (W; negative Richtung am NOAH noch nicht praktisch verifiziert) |
-| H311 | Bezugsleistung (W; verifiziert) |
-| H313 | Zubehöranzahl; blieb bei WLAN-Tests null |
-
-C122 verwendet `DEV:<Eintrag>-<Modus>-<Status>,<Name>,<Adresse>` mit `&` zwischen Einträgen. Modus 7 steht für WLAN-Suche; Status 0, 3 und 5 bedeuten ungekoppelt, gekoppelt und gelöscht. Gelöschte Einträge können MAC/IP behalten. Beispielbefehle: `ADD:111-7-_http._tcp.,2`, `CRL:112-7-add:sn,80225394980980|access,1`, `DEL:112-7-_http._tcp.,2`. Zum Koppeln und Löschen die tatsächliche Eintragsnummer verwenden.
-
-**Wichtige Firmwarebeobachtung:** Bei zwei getesteten NOAHs erzeugte eine erneute Suche mit bereits gekoppeltem Zähler einen ungekoppelten Eintrag und unterbrach anschließend die Messwertanzeige. Auch längeres Warten stellte sie nicht wieder her. Gezieltes Löschen des ungekoppelten Eintrags stellte die Messwerte wieder her, ohne die bestehende Kopplung zu löschen. Auch das Koppeln des zweiten Eintrags stellte die Messwerte wieder her. Bei zwei gekoppelten Zählern zeigte H311 im beobachteten Versuch den Wert von Eintrag 112, keine Summe. Welcher Zähler tatsächlich die Leistungsregelung bestimmt und ob `access,1` zuverlässig von der Regelung ausschließt, ist noch offen. Ein Nullwert allein beweist keine Störung. Dies könnte manche erfolglosen Kopplungen mit ShinePhone erklären; dieser Zusammenhang ist jedoch nicht nachgewiesen.
-
-## 6. CLI-Optionen
-
-```bash
-python noah_registers.py --help
-python noah_registers.py scan --help
-python noah_registers.py read --help
-python noah_registers.py list --help
-python noah_tui.py --help
-```
-
-Für `list` stehen unter anderem `--timeout`, `--block-size` (Standard 16), `--max-gap` (Standard 2) und `--verbose` zur Verfügung. Der frühere Schalter `list --type` ist aus Kompatibilitätsgründen noch vorhanden; maßgeblich sind die Registertypen in der Datei.
-
-## 7. Fehlersuche
-
-**`ModuleNotFoundError: noah_registers`** – die Versionsdatei muss als `noah_registers.py` neben `noah_tui.py` liegen.
-
-**`ModuleNotFoundError: textual` / `bleak`** – virtuelle Umgebung aktivieren und Abhängigkeiten installieren.
-
-**Keine BLE-Geräte gefunden** – Bluetooth-Adapter, Berechtigungen, Reichweite und mögliche parallele Verbindungen prüfen. Ein nicht gefundenes Gerät ist nicht zwangsläufig defekt.
-
-**Einzelregister liefert keine Werte** – nicht automatisch als „Register existiert nicht“ interpretieren. Einige NOAH-Register antworten nur in geeigneten Blockabfragen; die optimierten 16er-Fenster sind deshalb wichtig.
-
-**Firmware-Kombination wird abgelehnt** – prüfen, ob die Zeile exakt `119-120,21|Firmware|CombLBHBLB+ASCIIstrip(.)|.|I,C` lautet und beide Programme in der genannten Version vorliegen.
-
-**Anzeige teilweise unvollständig** – bei einer Kombination müssen alle benötigten Quellen erfolgreich gelesen werden. Ein fehlender C-Parameter darf nicht stillschweigend als gültige Firmwareversion ausgegeben werden.
-
-## 8. Projektstand und Grenzen
-
-BLE-Registerabfragen wurden an vier NOAH-Geräten getestet. WLAN-Suche, Kopplung, selektives Löschen und Messwertabfrage wurden mit Firmware 19.20.14.4026 und zwei Shelly-Pro-3EM-Emulatoren erprobt. Andere Firmwareversionen und Zubehörmodelle sind nicht verifiziert.
-
-Die SOH-Anzeige I:102 ist ebenfalls mit Vorsicht zu interpretieren: Für BMS-Version 14 beschreibt die verwandte NEXA-Dokumentation einen konstanten Wert von 100; ob und in welchem Umfang dies beim NOAH identisch umgesetzt ist, sollte separat verifiziert werden.
-
-## 9. Herkunft und Haftungshinweis
-
-Die BLE-Protokollbasis (`protocol.py`, `growatt_ble.py`) baut auf dem Community-Projekt **meiser79/growatt_noah_ble** auf. Bei einer Veröffentlichung sind dessen Lizenz- und Urheberrechtshinweise zu beachten.
-
-**Keine Verbindung zu Growatt; keine Garantie für Richtigkeit oder Betriebssicherheit.** Lesezugriffe sind für die Diagnose gedacht. Schreib- und Neustartfunktionen ausschließlich bewusst und auf eigene Verantwortung einsetzen.
+[English documentation](README_noah_ble_tools.md) · [Projektübersicht](../README.md)

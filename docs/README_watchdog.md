@@ -1,12 +1,30 @@
 # Growatt NOAH BLE Watchdog
 
-**Version 0.4.2 · Experimental / unofficial**
+**Project release 1.0 · November 27, 2026 · Watchdog 0.4.2 · Watchdog UI 0.1.6 · Experimental / unofficial**
 
 A Python watchdog for monitoring Growatt NOAH battery storage devices over Bluetooth Low Energy (BLE). It periodically reads connectivity status and can optionally restore Wi-Fi settings, check and repair MQTT broker configuration, and request a datalogger restart.
 
 The watchdog communicates directly with the NOAH over BLE; it does not depend on the Growatt cloud or a working MQTT connection to perform its checks.
 
 > **Caution:** Automatic configuration changes and restarts are experimental. Test with one device first, keep a backup of your settings, and enable only the recovery actions you actually need. No recovery action is enabled by default.
+
+## Interactive watchdog management (recommended on Linux)
+
+```bash
+python noah_tui.py
+```
+
+Press **W** on the start screen or register overview. The integrated `noah_watchdog_ui.py` provides:
+
+- Start, stop, restart and status controls (PID and runtime); process management uses Linux `/proc`.
+- Configurable monitoring interval and scan duration (defaults: five minutes and eight seconds).
+- **Geräte verwalten (BLE-Scan)** opens the existing interactive setup with its default scan duration. The running watchdog need not be stopped; the device list is reloaded when setup closes.
+- Explicit `[X]` / `[ ]` toggles for logging, Wi-Fi, MQTT and datalogger restart, plus the 1–3 cycle threshold and Save button.
+- A modal restart notice, confirmed with Enter, when configuration is saved or setup returns while the watchdog is running. The running process retains its loaded configuration until the user restarts it.
+- Watchdog and console logs, today/all periods, manual text filtering, recovery shortcuts and jump to end. Normal display restores the previous manual filter after a recovery shortcut.
+- Per-device recovery statistics for today, seven days and all time, counting recovery starts rather than successes.
+
+A watchdog started from the interface runs independently of the TUI and writes console output to `watchdog_console.log`. Closing the interface does not stop monitoring. Set up `credentials.txt` as described below before enabling recovery.
 
 ## Features
 
@@ -32,14 +50,16 @@ Example installation on Debian / Linux:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install bleak
+python -m pip install bleak textual rich
 ```
 
 Place the watchdog next to its shared BLE modules:
 
 ```text
 project/
-├── noah_watchdog.py             # Rename noah_watchdog_v0_4_2.py
+├── noah_tui.py                  # 1.0
+├── noah_watchdog_ui.py          # 0.1.6
+├── noah_watchdog.py             # 0.4.2
 ├── protocol.py
 ├── growatt_ble.py
 ├── credentials.txt              # Required for enabled Wi-Fi/MQTT actions; keep private
@@ -47,13 +67,15 @@ project/
 └── noah_watchdog.log            # Created when running
 ```
 
-## 1. Select devices and recovery options
+## CLI / standalone operation
+
+### 1. Select devices and recovery options
 
 ```bash
-python noah_watchdog.py setup --timeout 30
+python noah_watchdog.py setup
 ```
 
-The setup screen scans for devices and offers these options (the actual UI labels are in German):
+The default scan takes eight seconds; use `--timeout` to override it if needed. The setup screen scans for devices and offers these options (the actual UI labels are in German):
 
 | Setup option | Meaning |
 | --- | --- |
@@ -169,7 +191,7 @@ python -m pip install textual rich
 python noah_tui.py
 ```
 
-For register definitions, supported input/holding/configuration access, data conversions, write limitations, and TUI operation, see **https://github.com/nixo2/growatt-noah-ble-watchdog/blob/main/register-reader/README.md**. If you organize the project into subdirectories, adjust this relative link to the actual README location.
+For register definitions, supported input/holding/configuration access, data conversions, write limitations, and TUI operation, see the [BLE tools guide](README_noah_ble_tools.md).
 
 **Safety:** Do not edit unknown registers merely because they are visible in the TUI. Register write behavior is experimental and may affect battery or communication settings.
 
@@ -196,7 +218,11 @@ For register definitions, supported input/holding/configuration access, data con
 
 ## 9. Version notes
 
-**v0.4.2**
+**Watchdog UI v0.1.6 (project release 1.0)**
+
+- Integrated process management, device setup, recovery configuration and log statistics as described above.
+
+**Watchdog v0.4.2**
 
 - Check MQTT broker host/port on every successful poll when enabled.
 - Repair only mismatching MQTT fields and verify by reading them back.
@@ -206,4 +232,4 @@ For register definitions, supported input/holding/configuration access, data con
 
 ---
 
-**Related documentation:** https://github.com/nixo2/growatt-noah-ble-watchdog/blob/main/register-reader/README.md
+**Related documentation:** [BLE tools guide](README_noah_ble_tools.md)
