@@ -1,14 +1,16 @@
 # Growatt NOAH – BLE Register Diagnostics and Terminal Interface
 
-**Updated: November 26, 2026**  
-**`noah_registers.py` v0.8.2 · `noah_tui.py` v0.9.7**
+**Updated: November 27, 2026**  
+**Project release 1.0 · `noah_tui.py` v1.0 · `noah_watchdog_ui.py` v0.1.6 · `noah_watchdog.py` v0.4.2 · `noah_registers.py` v0.8.2**
 
-Two Python applications for reading and diagnosing Growatt NOAH battery systems directly over Bluetooth Low Energy (BLE):
+Tools for reading and diagnosing Growatt NOAH battery systems directly over Bluetooth Low Energy (BLE):
 
-- **`noah_registers.py`**: Command-line utility for device discovery, individual reads, register lists, and diagnostics.
-- **`noah_tui.py`**: Interactive Textual-based terminal interface with device management, a two-column register display, detail views, and selected write operations.
+- **`noah_tui.py`**: Recommended interactive Textual interface for register diagnostics, device management, configuration and timeslot editing.
+- **`noah_watchdog_ui.py`**: Integrated interactive watchdog management (Linux), accessible with `W`.
+- **`noah_registers.py`**: CLI utility for discovery, reads, register lists and diagnostics.
+- **`noah_watchdog.py`**: Standalone monitoring and optional recovery process.
 
-Both applications use the existing `protocol.py` and `growatt_ble.py` modules. BLE access does not require the Growatt cloud or MQTT. This project is **unofficial and experimental**; in particular, register meanings and write operations have not been approved by Growatt for this use.
+The BLE tools use the existing `protocol.py` and `growatt_ble.py` modules. BLE access does not require the Growatt cloud or MQTT. This project is **unofficial and experimental**; in particular, register meanings and write operations have not been approved by Growatt for this use.
 
 ## 1. Requirements and Files
 
@@ -25,7 +27,9 @@ Place these files in the same project directory:
 ```text
 project/
 ├── noah_registers.py       # v0.8.2
-├── noah_tui.py             # v0.9.7
+├── noah_tui.py             # v1.0
+├── noah_watchdog_ui.py     # v0.1.6
+├── noah_watchdog.py        # v0.4.2
 ├── protocol.py             # BLE protocol module
 ├── growatt_ble.py          # BLE device communication
 ├── registers.txt           # Register selection, conversion, layout
@@ -53,6 +57,12 @@ python noah_tui.py --address 'AA:BB:CC:DD:EE:FF'
 ```bash
 python noah_tui.py --file registers.txt
 ```
+
+### Integrated watchdog interface (Linux)
+
+Press `W` on the start screen or register overview. Manage devices via the existing BLE setup (default eight-second scan), configure logging and recovery, start/stop/restart the process, inspect PID and runtime, and view watchdog/console logs with filters and recovery statistics. Saving settings or returning from setup while monitoring is active opens a restart notice, confirmed with Enter. The process is not restarted automatically. Recovery statistics count starts, not successful repairs. See the [watchdog guide](README_watchdog.md).
+
+### Command-line interface (CLI)
 
 **CLI – discover devices:**
 
@@ -195,6 +205,7 @@ Standalone lines enclosed in double asterisks control the display:
 | `G` | Switch device |
 | `K` | Open device management |
 | `N` | Trigger datalogger restart (**active operation**) |
+| `W` | Open watchdog management (Linux) |
 | `Q` | Quit or close the current dialog |
 
 The TUI reads registers through `noah_registers.py`, displays the results in two columns, and opens a detail view with Enter. The optional `register_info.txt` adds explanatory notes under section headings such as `[I:120]`, `[H:254]`, or `[C:21]`.
