@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""NOAH BLE TUI v0.9.7: cached timeslot editor, keyboard navigation and direct selection.
+"""NOAH BLE TUI v1.0: cached timeslot editor, keyboard navigation and direct selection.
 
 Requires textual, bleak, and the unchanged noah_registers.py,
 protocol.py, growatt_ble.py and registers.txt in the same directory.
@@ -26,6 +26,7 @@ from textual.widgets import Footer, Header, Static, Input, Button, Label, Select
 from textual.widgets.option_list import Option
 
 import noah_registers as core
+from noah_watchdog_ui import WatchdogScreen
 
 BASE = Path(__file__).resolve().parent
 DEVICE_FILE = BASE / 'noah_devices.txt'
@@ -1307,6 +1308,7 @@ class NoahTUI(App):
         Binding('g', 'device_select', 'Gerät wählen'),
         Binding('k', 'device_config', 'Geräte verwalten'),
         Binding('r', 'refresh', 'Neu lesen'),
+        Binding('w', 'watchdog', 'Watchdog'),
         *[Binding(f'f{i}', f'refresh_group({i})', f'F{i}: Gruppe lesen', show=False) for i in range(1, 9)],
         Binding('q', 'quit', 'Beenden'),
     ]
@@ -1337,7 +1339,7 @@ class NoahTUI(App):
                 yield Static('Warte auf erste BLE-Abfrage ...', id='table0')
             with VerticalScroll(classes='pane', id='pane1'):
                 yield Static('', id='table1')
-        yield Static('↑↓ Auswahl  ←→ Spalte  Enter: Details und Ändern  G: Gerät  K: Konfiguration  N: Neustart  R: Neu lesen  Q: Ende', id='notice')
+        yield Static('↑↓ Auswahl  ←→ Spalte  Enter: Details und Ändern  G: Gerät  K: Konfiguration  N: Neustart  R: Neu lesen  W: Watchdog  Q: Ende', id='notice')
         yield Footer()
 
     async def on_mount(self):
@@ -1370,7 +1372,7 @@ class NoahTUI(App):
             self.cursors[i] = min(self.cursors[i], max(0, len(rows) - 1))
         self.draw()
         self.query_one('#notice', Static).update(
-            f'{sum(map(len, self.rows))} Registerzeilen | ↑↓ Auswahl  ←→ Spalte  Enter: Details und Ändern  G: Gerät  K: Konfiguration  N: Neustart  R: Neu lesen  Q: Ende')
+            f'{sum(map(len, self.rows))} Registerzeilen | ↑↓ Auswahl  ←→ Spalte  Enter: Details und Ändern  G: Gerät  K: Konfiguration  N: Neustart  R: Neu lesen  W: Watchdog  Q: Ende')
 
     async def load_data(self):
         if self.busy:
@@ -1773,6 +1775,10 @@ class NoahTUI(App):
             old = re.sub(r'\s+\([^()]*\)$', '', old)
         self.push_screen(WriteConfig(self.address, regs[0], label, old), self.on_write_finished)
 
+    def action_watchdog(self):
+        if not self.busy:
+            self.push_screen(WatchdogScreen())
+
     def action_device_select(self):
         if not self.busy:
             self.next_menu = 'select'
@@ -1918,7 +1924,7 @@ class DeviceMenu(App):
     #devicebox Label { margin-bottom: 1; }
     #devices { height: auto; }
     """
-    BINDINGS = [Binding('escape', 'quit', 'Abbrechen'), Binding('q', 'quit', 'Beenden')]
+    BINDINGS = [Binding('escape', 'quit', 'Abbrechen'), Binding('q', 'quit', 'Beenden'), Binding('w', 'watchdog', 'Watchdog')]
 
     def __init__(self, devices, mode='select'):
         super().__init__()
@@ -1935,6 +1941,7 @@ class DeviceMenu(App):
             yield Vertical(id='devices')
             with Horizontal():
                 yield Button('BLE-Suche', id='scan', variant='primary')
+                yield Button('Watchdog (W)', id='watchdog')
                 yield Button('Konfiguration' if self.mode == 'select' else 'Geräteauswahl', id='mode')
                 yield Button('Speichern' if self.mode == 'config' else 'Beenden', id='save')
 
@@ -1942,6 +1949,10 @@ class DeviceMenu(App):
         await self.refresh_list()
         if self.mode == 'config' and not self.devices:
             self.run_worker(self.scan_devices(), exclusive=True)
+
+    def action_watchdog(self):
+        if not self.scanning:
+            self.push_screen(WatchdogScreen())
 
     async def refresh_list(self):
         box = self.query_one('#devices', Vertical)
@@ -2000,7 +2011,9 @@ class DeviceMenu(App):
 
     async def on_button_pressed(self, event: Button.Pressed):
         name = event.button.id or ''
-        if name == 'scan':
+        if name == 'watchdog':
+            self.action_watchdog()
+        elif name == 'scan':
             self.run_worker(self.scan_devices(), exclusive=True)
         elif name == 'mode':
             self.mode = 'config' if self.mode == 'select' else 'select'
